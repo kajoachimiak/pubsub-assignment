@@ -28,7 +28,7 @@ class OrderTransformationServiceTest {
         String base64Document = loadAndEncodeFile("ubl-example.xml");
 
         // When
-        OrderJson result = service.transform(base64Document);
+        OrderJson result = service.transform(base64Document, "testMessageId");
 
         // Then
         assertThat(result).isNotNull();
@@ -48,7 +48,7 @@ class OrderTransformationServiceTest {
         String invalidBase64 = "Invalid_Base64_!@#";
 
         // When & Then
-        assertThatThrownBy(() -> service.transform(invalidBase64))
+        assertThatThrownBy(() -> service.transform(invalidBase64, "testMessageId"))
                 .isInstanceOf(InvalidBase64Exception.class)
                 .hasMessage("Document is not a valid Base64 string.");
     }
@@ -60,7 +60,7 @@ class OrderTransformationServiceTest {
         String base64Document = Base64.getEncoder().encodeToString(malformedXml.getBytes(StandardCharsets.UTF_8));
 
         // When & Then
-        assertThatThrownBy(() -> service.transform(base64Document))
+        assertThatThrownBy(() -> service.transform(base64Document, "testMessageId"))
                 .isInstanceOf(InvalidXmlException.class)
                 .hasMessageContaining("Message could not be parsed from XML to JSON");
     }
