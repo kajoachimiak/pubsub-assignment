@@ -8,6 +8,7 @@ import com.google.cloud.pubsub.v1.*;
 import com.google.pubsub.v1.ProjectSubscriptionName;
 import com.google.pubsub.v1.ProjectTopicName;
 import com.google.pubsub.v1.PushConfig;
+import com.pubsub.assignment.model.json.ErrorResponse;
 import com.pubsub.assignment.model.json.InputMessage;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -61,7 +62,6 @@ class OrderIntegrationTest {
                 .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
                 .usePlaintext()
                 .build();
-
         TransportChannelProvider channelProvider = FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel));
         NoCredentialsProvider credentialsProvider = NoCredentialsProvider.create();
 
@@ -90,7 +90,6 @@ class OrderIntegrationTest {
 
     @Test
     void shouldProcessOrderAndPublishToPubSub() throws Exception {
-        // given
         String validXml = "<Order><ID>99999</ID></Order>";
         String base64Xml = Base64.getEncoder().encodeToString(validXml.getBytes());
 
@@ -99,7 +98,6 @@ class OrderIntegrationTest {
         request.setTimestamp("2026-08-25T12:00:00Z");
         request.setDocument(base64Xml);
 
-        // Nasłuchiwanie odpowiedzi z Pub/Sub w osobnym wątku
         ArrayBlockingQueue<String> receivedMessages = new ArrayBlockingQueue<>(1);
         ManagedChannel channel = ManagedChannelBuilder
                 .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
@@ -121,19 +119,69 @@ class OrderIntegrationTest {
         subscriber.startAsync().awaitRunning();
 
         try {
-            // when: Wywołanie endpointu HTTP aplikacji
             ResponseEntity<Void> response = restTemplate.postForEntity("/api/orders", request, Void.class);
 
-            // then: Weryfikacja kodu odpowiedzi 200 OK
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-            // then: Weryfikacja czy przetworzony JSON trafił naPub/Sub
             String publishedPayload = receivedMessages.poll(5, TimeUnit.SECONDS);
             assertThat(publishedPayload).isNotNull();
             assertThat(publishedPayload).contains("\"orderId\":\"99999\"");
-
         } finally {
             subscriber.stopAsync();
         }
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenBase64IsInvalid() {
+        InputMessage request = new InputMessage();
+        request.setMessageId("msg-invalid-base64");
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument("NotValidBase64!!!");
+
+        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error()).isEqualTo("InvalidBase64");
+        assertThat(response.getBody().message()).isEqualTo("Document is not a valid Base64 string.");
+        assertThat(response.getBody().messageId()).isEqualTo("msg-invalid-base64");
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenXmlIsMalformed() {
+        String malformedXml = "<Order><ID>99999</ID>";
+        String base64Xml = Base64.getEncoder().encodeToString(malformedXml.getBytes());
+
+        InputMessage request = new InputMessage();
+        request.setMessageId("msg-invalid-xml");
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument(base64Xml);
+
+        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error()).isEqualTo("InvalidXml");
+        assertThat(response.getBody().message()).isEqualTo("Message could not be parsed from XML to JSON.");
+        assertThat(response.getBody().messageId()).isEqualTo("msg-invalid-xml");
+    }
+
+    @Test
+    void shouldReturnBadRequestWhenOrderIdIsMissing() {
+        String xmlWithoutId = "<Order></Order>";
+        String base64Xml = Base64.getEncoder().encodeToString(xmlWithoutId.getBytes());
+
+        InputMessage request = new InputMessage();
+        request.setMessageId("msg-missing-field");
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument(base64Xml);
+
+        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error()).isEqualTo("ValidationError");
+        assertThat(response.getBody().message()).isEqualTo("Order ID is required.");
+        assertThat(response.getBody().messageId()).isEqualTo("msg-missing-field");
     }
 }
