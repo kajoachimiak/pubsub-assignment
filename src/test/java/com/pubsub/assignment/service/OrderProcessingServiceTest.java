@@ -79,12 +79,12 @@ class OrderProcessingServiceTest {
     void shouldPropagateExceptionWhenTransformationFails() {
         // given
         when(transformationService.transform(any(), eq("msg-123")))
-                .thenThrow(new InvalidBase64Exception("Invalid Base64 payload", "msg-123"));
+                .thenThrow(new InvalidBase64Exception("Document is not a valid Base64 string.", "msg-123"));
 
         // when & then
         assertThatThrownBy(() -> orderProcessingService.processOrder(inputMessage))
                 .isInstanceOf(InvalidBase64Exception.class)
-                .hasMessage("Invalid Base64 payload");
+                .hasMessage("Document is not a valid Base64 string.");
 
         verify(orderPublisher, never()).publish(any());
     }

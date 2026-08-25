@@ -4,6 +4,19 @@ services:
     command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
     ports:
       - "8085:8085"
+
+  pubsub-init:
+    image: curlimages/curl
+    depends_on:
+      - pubsub-emulator
+    command: >
+      sh -c "
+        sleep 5 &&
+        curl -s -X PUT 'http://pubsub-emulator:8085/v1/projects/local-assignment-project/topics/orders.transformed' &&
+        curl -s -X PUT 'http://pubsub-emulator:8085/v1/projects/local-assignment-project/topics/orders.failed' &&
+        echo 'Topics created successfully'
+      "
+
   app:
     build: .
     image: pubsub-assignment:latest
@@ -15,3 +28,4 @@ services:
       - APP_PUBSUB_OUTPUT_TOPIC=orders.transformed
     depends_on:
       - pubsub-emulator
+      - pubsub-init

@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamReader;
+import javax.xml.stream.util.StreamReaderDelegate;
 import java.io.ByteArrayInputStream;
 import java.util.Base64;
 
@@ -26,26 +27,29 @@ public class OrderTransformationService {
 
     public OrderJson transform(String base64Document, String messageId) {
         byte[] decodedXmlBytes;
-
         try {
             decodedXmlBytes = Base64.getDecoder().decode(base64Document);
         } catch (IllegalArgumentException e) {
-            throw new InvalidBase64Exception(String.format("Invalid Base64 payload (Message ID: %s)", messageId), messageId);
+            throw new InvalidBase64Exception("Document is not a valid Base64 string.", messageId);
         }
 
         OrderJson orderJson;
-
         try {
             XMLInputFactory xif = XMLInputFactory.newFactory();
-            xif.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, false);
             XMLStreamReader xsr = xif.createXMLStreamReader(new ByteArrayInputStream(decodedXmlBytes));
+
+            XMLStreamReader noNsReader = new StreamReaderDelegate(xsr) {
+                @Override
+                public String getNamespaceURI() {
+                    return "";
+                }
+            };
 
             JAXBContext context = JAXBContext.newInstance(OrderXml.class);
             Unmarshaller unmarshaller = context.createUnmarshaller();
-            OrderXml orderXml = (OrderXml) unmarshaller.unmarshal(xsr);
+            OrderXml orderXml = (OrderXml) unmarshaller.unmarshal(noNsReader);
 
             orderJson = orderMapper.toOrderJson(orderXml);
-
         } catch (Exception e) {
             log.error("Failed to parse XML", e);
             throw new InvalidXmlException("Message could not be parsed from XML to JSON.", messageId, e);
