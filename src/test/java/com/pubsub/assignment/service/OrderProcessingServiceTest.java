@@ -18,6 +18,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,7 +36,6 @@ class OrderProcessingServiceTest {
     @Mock
     private OrderPublisher orderPublisher;
 
-    // Zamrażamy czas w teście, aby wynik transformedAt był w 100% przewidywalny
     @Spy
     private Clock clock = Clock.fixed(Instant.parse("2026-08-24T12:00:00Z"), ZoneOffset.UTC);
 
@@ -60,9 +61,11 @@ class OrderProcessingServiceTest {
         // given
         when(transformationService.transform("validBase64XmlString", "msg-123"))
                 .thenReturn(mockOrderJson);
+        when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));
 
         // when
-        orderProcessingService.processOrder(inputMessage);
+        CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
+        result.join();
 
         // then
         ArgumentCaptor<OutputMessage> captor = ArgumentCaptor.forClass(OutputMessage.class);
@@ -79,12 +82,17 @@ class OrderProcessingServiceTest {
     void shouldPropagateExceptionWhenTransformationFails() {
         // given
         when(transformationService.transform(any(), eq("msg-123")))
-                .thenThrow(new InvalidBase64Exception("Document is not a valid Base64 string.", "msg-123"));
+                .thenThrow(new InvalidBase64Exception("Invalid Base64 payload", "msg-123"));
 
-        // when & then
-        assertThatThrownBy(() -> orderProcessingService.processOrder(inputMessage))
-                .isInstanceOf(InvalidBase64Exception.class)
-                .hasMessage("Document is not a valid Base64 string.");
+        // when
+        CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
+
+        // then
+        assertThat(result).isCompletedExceptionally();
+        assertThatThrownBy(result::join)
+                .isInstanceOf(CompletionException.class)
+                .hasCauseInstanceOf(InvalidBase64Exception.class)
+                .hasMessageContaining("Invalid Base64 payload");
 
         verify(orderPublisher, never()).publish(any());
     }
@@ -94,13 +102,19 @@ class OrderProcessingServiceTest {
         // given
         when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
 
-        doThrow(new PublishingException("Publishing error", "msg-123", new RuntimeException()))
-                .when(orderPublisher).publish(any());
+        when(orderPublisher.publish(any())).thenReturn(
+                CompletableFuture.failedFuture(new PublishingException("Publishing error", "msg-123", new RuntimeException()))
+        );
 
-        // when & then
-        assertThatThrownBy(() -> orderProcessingService.processOrder(inputMessage))
-                .isInstanceOf(PublishingException.class)
-                .hasMessage("Publishing error");
+        // when
+        CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
+
+        // then
+        assertThat(result).isCompletedExceptionally();
+        assertThatThrownBy(result::join)
+                .isInstanceOf(CompletionException.class)
+                .hasCauseInstanceOf(PublishingException.class)
+                .hasMessageContaining("Publishing error");
 
         verify(transformationService, times(1)).transform("validBase64XmlString", "msg-123");
     }

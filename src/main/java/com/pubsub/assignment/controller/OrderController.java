@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.concurrent.CompletableFuture;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/orders")
@@ -23,10 +25,11 @@ public class OrderController {
     @PostMapping(
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
-    )    public ResponseEntity<Void> handlePubSubPush(@Valid @RequestBody InputMessage inputMessage) {
+    )
+    public CompletableFuture<ResponseEntity<Void>> handlePubSubPush(@Valid @RequestBody InputMessage inputMessage) {
         log.debug("Received push notification for message ID: {}", inputMessage.getMessageId());
-        orderProcessingService.processOrder(inputMessage);
 
-        return ResponseEntity.ok().build();
+        return orderProcessingService.processOrder(inputMessage)
+                .thenApply(v -> ResponseEntity.ok().<Void>build());
     }
 }

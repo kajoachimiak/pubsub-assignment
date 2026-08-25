@@ -13,11 +13,16 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import java.util.concurrent.CompletableFuture;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(OrderController.class)
@@ -46,12 +51,18 @@ class OrderControllerTest {
     @Test
     void shouldReturn200OnSuccess() throws Exception {
         // given
-        doNothing().when(orderProcessingService).processOrder(any(InputMessage.class));
+        when(orderProcessingService.processOrder(any(InputMessage.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
 
-        // when & then
-        mockMvc.perform(post("/api/orders")
+        // when
+        MvcResult mvcResult = mockMvc.perform(post("/api/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validMessage)))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // then
+        mockMvc.perform(asyncDispatch(mvcResult))
                 .andExpect(status().isOk());
 
         verify(orderProcessingService, times(1)).processOrder(any(InputMessage.class));
@@ -60,13 +71,19 @@ class OrderControllerTest {
     @Test
     void shouldReturn400WhenInvalidXmlExceptionIsThrown() throws Exception {
         // given
-        doThrow(new InvalidXmlException("Malformed XML input", "msg-123", new RuntimeException("Xml error")))
-                .when(orderProcessingService).processOrder(any(InputMessage.class));
+        InvalidXmlException ex = new InvalidXmlException("Malformed XML input", "msg-123", new RuntimeException("Xml error"));
+        when(orderProcessingService.processOrder(any(InputMessage.class)))
+                .thenReturn(CompletableFuture.failedFuture(ex));
 
-        // when & then
-        mockMvc.perform(post("/api/orders")
+        // when
+        MvcResult mvcResult = mockMvc.perform(post("/api/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validMessage)))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // then
+        mockMvc.perform(asyncDispatch(mvcResult))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("InvalidXml"))
                 .andExpect(jsonPath("$.message").value("Malformed XML input"))
@@ -75,7 +92,7 @@ class OrderControllerTest {
 
     @Test
     void shouldReturn400WhenInputValidationFails() throws Exception {
-        // given - brak wymaganych pól messageId oraz document
+        // given
         InputMessage invalidMessage = new InputMessage();
 
         // when & then

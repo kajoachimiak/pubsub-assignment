@@ -12,6 +12,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Service
@@ -22,17 +23,21 @@ public class OrderProcessingService {
     private final OrderPublisher orderPublisher;
     private final Clock clock;
 
-    public void processOrder(InputMessage inputMessage) {
+    public CompletableFuture<Void> processOrder(InputMessage inputMessage) {
         String messageId = inputMessage.getMessageId();
         log.info("Starting processing for message ID: {}", messageId);
 
-        OrderJson orderJson = transformationService.transform(inputMessage.getDocument(), messageId);
+        OrderJson orderJson;
+        try {
+            orderJson = transformationService.transform(inputMessage.getDocument(), messageId);
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
+
         OutputMessage outputMessage = createOutputMessage(messageId, orderJson);
 
-        // publikacja na wyjściowy topic
-        orderPublisher.publish(outputMessage);
-
-        log.info("Successfully completed processing for message ID: {}", messageId);
+        return orderPublisher.publish(outputMessage)
+                .thenAccept(result -> log.info("Successfully completed processing for message ID: {}", messageId));
     }
 
     private OutputMessage createOutputMessage(String messageId, OrderJson orderJson) {
