@@ -17,7 +17,7 @@ import java.util.Base64;
 public class OrderTransformationService {
 
     private final OrderMapper orderMapper;
-    private final XmlMapper xmlMapper;
+    private final XmlMapper xmlMapper = new XmlMapper();
 
     public OrderJson transform(String base64Document, String messageId) {
         byte[] decodedXmlBytes;

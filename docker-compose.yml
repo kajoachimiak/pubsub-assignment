@@ -1,0 +1,16 @@
+services:
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+  app:
+    image: pubsub-assignment:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_CLOUD_GCP_PROJECT_ID=local-assignment-project
+      - SPRING_CLOUD_GCP_PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - APP_PUBSUB_OUTPUT_TOPIC=orders.transformed
+    depends_on:
+      - pubsub-emulator
