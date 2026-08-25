@@ -51,7 +51,7 @@ class OrderTransformationServiceTest {
     @Test
     void shouldThrowInvalidBase64ExceptionWhenPayloadIsNotBase64() {
         // given
-        String invalidBase64 = "To nie jest poprawny Base64!@#";
+        String invalidBase64 = "Invalid Base64!@#";
         String messageId = "msg-123";
 
         // when & then

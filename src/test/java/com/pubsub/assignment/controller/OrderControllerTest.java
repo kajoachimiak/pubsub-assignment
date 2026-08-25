@@ -2,7 +2,9 @@ package com.pubsub.assignment.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pubsub.assignment.exception.GlobalExceptionHandler;
+import com.pubsub.assignment.exception.InvalidBase64Exception;
 import com.pubsub.assignment.exception.InvalidXmlException;
+import com.pubsub.assignment.exception.MissingFieldException;
 import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.service.OrderProcessingService;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,9 +45,9 @@ class OrderControllerTest {
     @BeforeEach
     void setUp() {
         validMessage = new InputMessage();
-        validMessage.setMessageId("msg-123");
+        validMessage.setMessageId("7a1e78c9");
         validMessage.setDocument("dGVzdC14bWwtY29udGVudA==");
-        validMessage.setTimestamp("2026-08-24T12:00:00Z");
+        validMessage.setTimestamp("2026-07-27T12:00:00Z");
     }
 
     @Test
@@ -69,9 +71,31 @@ class OrderControllerTest {
     }
 
     @Test
+    void shouldReturn400WhenInvalidBase64ExceptionIsThrown() throws Exception {
+        // given
+        InvalidBase64Exception ex = new InvalidBase64Exception("Document is not a valid Base64 string.", "7a1e78c9");
+        when(orderProcessingService.processOrder(any(InputMessage.class)))
+                .thenReturn(CompletableFuture.failedFuture(ex));
+
+        // when
+        MvcResult mvcResult = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validMessage)))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // then
+        mockMvc.perform(asyncDispatch(mvcResult))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("InvalidBase64"))
+                .andExpect(jsonPath("$.message").value("Document is not a valid Base64 string."))
+                .andExpect(jsonPath("$.messageId").value("7a1e78c9"));
+    }
+
+    @Test
     void shouldReturn400WhenInvalidXmlExceptionIsThrown() throws Exception {
         // given
-        InvalidXmlException ex = new InvalidXmlException("Malformed XML input", "msg-123", new RuntimeException("Xml error"));
+        InvalidXmlException ex = new InvalidXmlException("Message could not be parsed from XML to JSON.", "7a1e78c9", new RuntimeException());
         when(orderProcessingService.processOrder(any(InputMessage.class)))
                 .thenReturn(CompletableFuture.failedFuture(ex));
 
@@ -86,12 +110,55 @@ class OrderControllerTest {
         mockMvc.perform(asyncDispatch(mvcResult))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("InvalidXml"))
-                .andExpect(jsonPath("$.message").value("Malformed XML input"))
-                .andExpect(jsonPath("$.messageId").value("msg-123"));
+                .andExpect(jsonPath("$.message").value("Message could not be parsed from XML to JSON."))
+                .andExpect(jsonPath("$.messageId").value("7a1e78c9"));
     }
 
     @Test
-    void shouldReturn400WhenInputValidationFails() throws Exception {
+    void shouldReturn400WhenMissingFieldExceptionIsThrown() throws Exception {
+        // given
+        MissingFieldException ex = new MissingFieldException("Order ID is required.", "7a1e78c9");
+        when(orderProcessingService.processOrder(any(InputMessage.class)))
+                .thenReturn(CompletableFuture.failedFuture(ex));
+
+        // when
+        MvcResult mvcResult = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validMessage)))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // then
+        mockMvc.perform(asyncDispatch(mvcResult))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("ValidationError"))
+                .andExpect(jsonPath("$.message").value("Order ID is required."))
+                .andExpect(jsonPath("$.messageId").value("7a1e78c9"));
+    }
+
+    @Test
+    void shouldReturn500WhenUnexpectedErrorOccurs() throws Exception {
+        // given
+        when(orderProcessingService.processOrder(any(InputMessage.class)))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Some random database or network error")));
+
+        // when
+        MvcResult mvcResult = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validMessage)))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // then
+        mockMvc.perform(asyncDispatch(mvcResult))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error").value("ServerError"))
+                .andExpect(jsonPath("$.message").value("An unexpected error occurred."))
+                .andExpect(jsonPath("$.messageId").value("unknown"));
+    }
+
+    @Test
+    void shouldReturn400WhenInputValidationFailsForEmptyPayload() throws Exception {
         // given
         InputMessage invalidMessage = new InputMessage();
 
