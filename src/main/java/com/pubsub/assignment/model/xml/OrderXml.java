@@ -1,28 +1,29 @@
 package com.pubsub.assignment.model.xml;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlElementWrapper;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty;
+import jakarta.xml.bind.annotation.XmlAccessType;
+import jakarta.xml.bind.annotation.XmlAccessorType;
+import jakarta.xml.bind.annotation.XmlElement;
+import jakarta.xml.bind.annotation.XmlRootElement;
 import lombok.Data;
-
 import java.util.List;
 
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
+@XmlRootElement(name = "Order")
+@XmlAccessorType(XmlAccessType.FIELD)
 public class OrderXml {
-    @JacksonXmlProperty(localName = "ID")
+
+    @XmlElement(name = "ID")
     private String id;
 
-    @JacksonXmlProperty(localName = "IssueDate")
+    @XmlElement(name = "IssueDate")
     private String issueDate;
 
-    @JacksonXmlProperty(localName = "CustomerReference")
+    @XmlElement(name = "CustomerReference")
     private String customerReference;
 
-    @JacksonXmlProperty(localName = "BuyerCustomerParty")
+    @XmlElement(name = "BuyerCustomerParty")
     private BuyerCustomerPartyXml buyerCustomerParty;
 
-    @JacksonXmlProperty(localName = "OrderLine")
-    @JacksonXmlElementWrapper(useWrapping = false)
+    @XmlElement(name = "OrderLine")
     private List<OrderLineXml> orderLines;
 }

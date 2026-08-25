@@ -1,18 +1,19 @@
 package com.pubsub.assignment.model.xml;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty;
+import jakarta.xml.bind.annotation.XmlAccessType;
+import jakarta.xml.bind.annotation.XmlAccessorType;
+import jakarta.xml.bind.annotation.XmlElement;
 import lombok.Data;
 
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
+@XmlAccessorType(XmlAccessType.FIELD)
 public class LineItemXml {
-    @JacksonXmlProperty(localName = "ID")
+    @XmlElement(name = "ID")
     private Integer id;
 
-    @JacksonXmlProperty(localName = "Quantity")
+    @XmlElement(name = "Quantity")
     private QuantityXml quantity;
 
-    @JacksonXmlProperty(localName = "Item")
+    @XmlElement(name = "Item")
     private ItemXml item;
 }

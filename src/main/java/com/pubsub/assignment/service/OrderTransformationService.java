@@ -1,23 +1,28 @@
 package com.pubsub.assignment.service;
 
-import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.pubsub.assignment.exception.InvalidBase64Exception;
 import com.pubsub.assignment.exception.InvalidXmlException;
 import com.pubsub.assignment.exception.MissingFieldException;
 import com.pubsub.assignment.mapper.OrderMapper;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.xml.OrderXml;
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.Unmarshaller;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamReader;
+import java.io.ByteArrayInputStream;
 import java.util.Base64;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderTransformationService {
 
     private final OrderMapper orderMapper;
-    private final XmlMapper xmlMapper = new XmlMapper();
 
     public OrderJson transform(String base64Document, String messageId) {
         byte[] decodedXmlBytes;
@@ -25,14 +30,24 @@ public class OrderTransformationService {
         try {
             decodedXmlBytes = Base64.getDecoder().decode(base64Document);
         } catch (IllegalArgumentException e) {
-            throw new InvalidBase64Exception("Document is not a valid Base64 string.", messageId);
+            throw new InvalidBase64Exception(String.format("Invalid Base64 payload (Message ID: %s)", messageId), messageId);
         }
 
         OrderJson orderJson;
+
         try {
-            OrderXml orderXml = xmlMapper.readValue(decodedXmlBytes, OrderXml.class);
+            XMLInputFactory xif = XMLInputFactory.newFactory();
+            xif.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, false);
+            XMLStreamReader xsr = xif.createXMLStreamReader(new ByteArrayInputStream(decodedXmlBytes));
+
+            JAXBContext context = JAXBContext.newInstance(OrderXml.class);
+            Unmarshaller unmarshaller = context.createUnmarshaller();
+            OrderXml orderXml = (OrderXml) unmarshaller.unmarshal(xsr);
+
             orderJson = orderMapper.toOrderJson(orderXml);
+
         } catch (Exception e) {
+            log.error("Failed to parse XML", e);
             throw new InvalidXmlException("Message could not be parsed from XML to JSON.", messageId, e);
         }
 

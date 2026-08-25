@@ -5,6 +5,7 @@ import com.pubsub.assignment.service.OrderProcessingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -19,8 +20,10 @@ public class OrderController {
 
     private final OrderProcessingService orderProcessingService;
 
-    @PostMapping
-    public ResponseEntity<Void> handlePubSubPush(@Valid @RequestBody InputMessage inputMessage) {
+    @PostMapping(
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )    public ResponseEntity<Void> handlePubSubPush(@Valid @RequestBody InputMessage inputMessage) {
         log.debug("Received push notification for message ID: {}", inputMessage.getMessageId());
         orderProcessingService.processOrder(inputMessage);
 

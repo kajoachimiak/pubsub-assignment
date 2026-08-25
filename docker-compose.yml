@@ -5,6 +5,7 @@ services:
     ports:
       - "8085:8085"
   app:
+    build: .
     image: pubsub-assignment:latest
     ports:
       - "8080:8080"

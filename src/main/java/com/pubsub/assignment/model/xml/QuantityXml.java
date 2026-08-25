@@ -1,16 +1,17 @@
 package com.pubsub.assignment.model.xml;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty;
-import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlText;
+import jakarta.xml.bind.annotation.XmlAccessType;
+import jakarta.xml.bind.annotation.XmlAccessorType;
+import jakarta.xml.bind.annotation.XmlAttribute;
+import jakarta.xml.bind.annotation.XmlValue;
 import lombok.Data;
 
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)
+@XmlAccessorType(XmlAccessType.FIELD)
 public class QuantityXml {
-    @JacksonXmlProperty(isAttribute = true, localName = "unitCode")
+    @XmlAttribute(name = "unitCode")
     private String unitCode;
 
-    @JacksonXmlText
+    @XmlValue
     private Integer value;
 }
