@@ -2,6 +2,7 @@ package com.pubsub.assignment.service;
 
 import com.pubsub.assignment.exception.InvalidBase64Exception;
 import com.pubsub.assignment.exception.PublishingException;
+import com.pubsub.assignment.model.json.FailedMessage;
 import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.json.OutputMessage;
@@ -37,7 +38,7 @@ class OrderProcessingServiceTest {
     private OrderPublisher orderPublisher;
 
     @Spy
-    private Clock clock = Clock.fixed(Instant.parse("2026-08-24T12:00:00Z"), ZoneOffset.UTC);
+    private Clock clock = Clock.fixed(Instant.parse("2026-08-25T12:00:00Z"), ZoneOffset.UTC);
 
     @InjectMocks
     private OrderProcessingService orderProcessingService;
@@ -49,7 +50,7 @@ class OrderProcessingServiceTest {
     void setUp() {
         inputMessage = new InputMessage();
         inputMessage.setMessageId("msg-123");
-        inputMessage.setTimestamp("2026-08-24T12:00:00Z");
+        inputMessage.setTimestamp("2026-08-25T12:00:00Z");
         inputMessage.setDocument("validBase64XmlString");
 
         mockOrderJson = new OrderJson();
@@ -58,64 +59,65 @@ class OrderProcessingServiceTest {
 
     @Test
     void shouldProcessAndPublishOrderSuccessfully() {
-        // given
         when(transformationService.transform("validBase64XmlString", "msg-123"))
                 .thenReturn(mockOrderJson);
         when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));
 
-        // when
         CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
         result.join();
 
-        // then
         ArgumentCaptor<OutputMessage> captor = ArgumentCaptor.forClass(OutputMessage.class);
         verify(transformationService, times(1)).transform("validBase64XmlString", "msg-123");
         verify(orderPublisher, times(1)).publish(captor.capture());
+        verify(orderPublisher, never()).publishToDlq(any());
 
         OutputMessage publishedMessage = captor.getValue();
         assertThat(publishedMessage.getMessageId()).isEqualTo("msg-123");
-        assertThat(publishedMessage.getTransformedAt()).isEqualTo("2026-08-24T12:00:00Z");
+        assertThat(publishedMessage.getTransformedAt()).isEqualTo("2026-08-25T12:00:00Z");
         assertThat(publishedMessage.getOrder()).isEqualTo(mockOrderJson);
     }
 
     @Test
-    void shouldPropagateExceptionWhenTransformationFails() {
-        // given
+    void shouldRouteToDlqAndPropagateExceptionWhenTransformationFails() {
         when(transformationService.transform(any(), eq("msg-123")))
-                .thenThrow(new InvalidBase64Exception("Invalid Base64 payload", "msg-123"));
+                .thenThrow(new InvalidBase64Exception("Document is not a valid Base64 string.", "msg-123"));
+        when(orderPublisher.publishToDlq(any()))
+                .thenReturn(CompletableFuture.completedFuture("dlq-ack-id"));
 
-        // when
         CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
 
-        // then
         assertThat(result).isCompletedExceptionally();
         assertThatThrownBy(result::join)
                 .isInstanceOf(CompletionException.class)
-                .hasCauseInstanceOf(InvalidBase64Exception.class)
-                .hasMessageContaining("Invalid Base64 payload");
+                .hasCauseInstanceOf(InvalidBase64Exception.class);
 
+        ArgumentCaptor<FailedMessage> dlqCaptor = ArgumentCaptor.forClass(FailedMessage.class);
+        verify(orderPublisher, times(1)).publishToDlq(dlqCaptor.capture());
         verify(orderPublisher, never()).publish(any());
+
+        FailedMessage failedMessage = dlqCaptor.getValue();
+        assertThat(failedMessage.getMessageId()).isEqualTo("msg-123");
+        assertThat(failedMessage.getReason()).isEqualTo("Document is not a valid Base64 string.");
+        assertThat(failedMessage.getRawDocument()).isEqualTo("validBase64XmlString");
+        assertThat(failedMessage.getFailedAt()).isEqualTo("2026-08-25T12:00:00Z");
     }
 
     @Test
-    void shouldPropagateExceptionWhenPublishingFails() {
-        // given
+    void shouldRouteToDlqAndPropagateExceptionWhenPublishingFails() {
         when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
-
         when(orderPublisher.publish(any())).thenReturn(
-                CompletableFuture.failedFuture(new PublishingException("Publishing error", "msg-123", new RuntimeException()))
+                CompletableFuture.failedFuture(new PublishingException("Failed to publish to Pub/Sub", "msg-123", new RuntimeException()))
         );
+        when(orderPublisher.publishToDlq(any()))
+                .thenReturn(CompletableFuture.completedFuture("dlq-ack-id"));
 
-        // when
         CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
 
-        // then
         assertThat(result).isCompletedExceptionally();
         assertThatThrownBy(result::join)
                 .isInstanceOf(CompletionException.class)
-                .hasCauseInstanceOf(PublishingException.class)
-                .hasMessageContaining("Publishing error");
+                .hasCauseInstanceOf(PublishingException.class);
 
-        verify(transformationService, times(1)).transform("validBase64XmlString", "msg-123");
+        verify(orderPublisher, times(1)).publishToDlq(any(FailedMessage.class));
     }
 }

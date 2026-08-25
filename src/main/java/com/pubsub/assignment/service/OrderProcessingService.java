@@ -1,5 +1,6 @@
 package com.pubsub.assignment.service;
 
+import com.pubsub.assignment.model.json.FailedMessage;
 import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.json.OutputMessage;
@@ -13,6 +14,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 @Slf4j
 @Service
@@ -27,17 +29,31 @@ public class OrderProcessingService {
         String messageId = inputMessage.getMessageId();
         log.info("Starting processing for message ID: {}", messageId);
 
-        OrderJson orderJson;
         try {
-            orderJson = transformationService.transform(inputMessage.getDocument(), messageId);
+            OrderJson orderJson = transformationService.transform(inputMessage.getDocument(), messageId);
+            OutputMessage outputMessage = createOutputMessage(messageId, orderJson);
+
+            return orderPublisher.publish(outputMessage)
+                    .thenAccept(result -> log.info("Successfully completed processing for message ID: {}", messageId))
+                    .exceptionallyCompose(ex -> handleFailure(inputMessage, ex));
         } catch (Exception e) {
-            return CompletableFuture.failedFuture(e);
+            return handleFailure(inputMessage, e);
         }
+    }
 
-        OutputMessage outputMessage = createOutputMessage(messageId, orderJson);
+    private CompletableFuture<Void> handleFailure(InputMessage inputMessage, Throwable ex) {
+        Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+        log.warn("Processing failed for message ID: {}. Routing to DLQ. Reason: {}", inputMessage.getMessageId(), cause.getMessage());
 
-        return orderPublisher.publish(outputMessage)
-                .thenAccept(result -> log.info("Successfully completed processing for message ID: {}", messageId));
+        FailedMessage failedMessage = FailedMessage.builder()
+                .messageId(inputMessage.getMessageId())
+                .failedAt(DateTimeFormatter.ISO_INSTANT.format(Instant.now(clock).atOffset(ZoneOffset.UTC)))
+                .reason(cause.getMessage())
+                .rawDocument(inputMessage.getDocument())
+                .build();
+
+        return orderPublisher.publishToDlq(failedMessage)
+                .thenCompose(dlqResult -> CompletableFuture.failedFuture(cause));
     }
 
     private OutputMessage createOutputMessage(String messageId, OrderJson orderJson) {

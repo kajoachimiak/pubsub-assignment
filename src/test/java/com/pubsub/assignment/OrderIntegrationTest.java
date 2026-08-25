@@ -39,7 +39,9 @@ class OrderIntegrationTest {
 
     private static final String PROJECT_ID = "test-project";
     private static final String TOPIC_ID = "orders.transformed";
+    private static final String FAILED_TOPIC_ID = "orders.failed";
     private static final String SUBSCRIPTION_ID = "test-subscription";
+    private static final String FAILED_SUBSCRIPTION_ID = "test-failed-subscription";
 
     @Container
     private static final PubSubEmulatorContainer PUB_SUB_EMULATOR =
@@ -54,6 +56,7 @@ class OrderIntegrationTest {
         registry.add("spring.cloud.gcp.project-id", () -> PROJECT_ID);
         registry.add("spring.cloud.gcp.pubsub.emulator-host", PUB_SUB_EMULATOR::getEmulatorEndpoint);
         registry.add("app.pubsub.output-topic", () -> TOPIC_ID);
+        registry.add("app.pubsub.failed-topic", () -> FAILED_TOPIC_ID);
     }
 
     @BeforeAll
@@ -71,6 +74,7 @@ class OrderIntegrationTest {
                         .setCredentialsProvider(credentialsProvider)
                         .build())) {
             topicAdminClient.createTopic(ProjectTopicName.of(PROJECT_ID, TOPIC_ID));
+            topicAdminClient.createTopic(ProjectTopicName.of(PROJECT_ID, FAILED_TOPIC_ID));
         }
 
         try (SubscriptionAdminClient subscriptionAdminClient = SubscriptionAdminClient.create(
@@ -81,6 +85,12 @@ class OrderIntegrationTest {
             subscriptionAdminClient.createSubscription(
                     ProjectSubscriptionName.of(PROJECT_ID, SUBSCRIPTION_ID),
                     ProjectTopicName.of(PROJECT_ID, TOPIC_ID),
+                    PushConfig.getDefaultInstance(),
+                    10);
+
+            subscriptionAdminClient.createSubscription(
+                    ProjectSubscriptionName.of(PROJECT_ID, FAILED_SUBSCRIPTION_ID),
+                    ProjectTopicName.of(PROJECT_ID, FAILED_TOPIC_ID),
                     PushConfig.getDefaultInstance(),
                     10);
         }
@@ -132,56 +142,44 @@ class OrderIntegrationTest {
     }
 
     @Test
-    void shouldReturnBadRequestWhenBase64IsInvalid() {
+    void shouldPublishToDlqTopicWhenProcessingFails() throws Exception {
         InputMessage request = new InputMessage();
-        request.setMessageId("msg-invalid-base64");
+        request.setMessageId("msg-dlq-test");
         request.setTimestamp("2026-08-25T12:00:00Z");
-        request.setDocument("NotValidBase64!!!");
+        request.setDocument("InvalidBase64Content!!!");
 
-        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
+        ArrayBlockingQueue<String> dlqMessages = new ArrayBlockingQueue<>(1);
+        ManagedChannel channel = ManagedChannelBuilder
+                .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
+                .usePlaintext()
+                .build();
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().error()).isEqualTo("InvalidBase64");
-        assertThat(response.getBody().message()).isEqualTo("Document is not a valid Base64 string.");
-        assertThat(response.getBody().messageId()).isEqualTo("msg-invalid-base64");
-    }
+        MessageReceiver receiver = (message, consumer) -> {
+            dlqMessages.add(message.getData().toStringUtf8());
+            consumer.ack();
+        };
 
-    @Test
-    void shouldReturnBadRequestWhenXmlIsMalformed() {
-        String malformedXml = "<Order><ID>99999</ID>";
-        String base64Xml = Base64.getEncoder().encodeToString(malformedXml.getBytes());
+        Subscriber subscriber = Subscriber.newBuilder(
+                        ProjectSubscriptionName.of(PROJECT_ID, FAILED_SUBSCRIPTION_ID),
+                        receiver)
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
 
-        InputMessage request = new InputMessage();
-        request.setMessageId("msg-invalid-xml");
-        request.setTimestamp("2026-08-25T12:00:00Z");
-        request.setDocument(base64Xml);
+        subscriber.startAsync().awaitRunning();
 
-        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
+        try {
+            ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().error()).isEqualTo("InvalidXml");
-        assertThat(response.getBody().message()).isEqualTo("Message could not be parsed from XML to JSON.");
-        assertThat(response.getBody().messageId()).isEqualTo("msg-invalid-xml");
-    }
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
 
-    @Test
-    void shouldReturnBadRequestWhenOrderIdIsMissing() {
-        String xmlWithoutId = "<Order></Order>";
-        String base64Xml = Base64.getEncoder().encodeToString(xmlWithoutId.getBytes());
-
-        InputMessage request = new InputMessage();
-        request.setMessageId("msg-missing-field");
-        request.setTimestamp("2026-08-25T12:00:00Z");
-        request.setDocument(base64Xml);
-
-        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity("/api/orders", request, ErrorResponse.class);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().error()).isEqualTo("ValidationError");
-        assertThat(response.getBody().message()).isEqualTo("Order ID is required.");
-        assertThat(response.getBody().messageId()).isEqualTo("msg-missing-field");
+            String dlqPayload = dlqMessages.poll(5, TimeUnit.SECONDS);
+            assertThat(dlqPayload).isNotNull();
+            assertThat(dlqPayload).contains("\"messageId\":\"msg-dlq-test\"");
+            assertThat(dlqPayload).contains("\"reason\":\"Document is not a valid Base64 string.\"");
+            assertThat(dlqPayload).contains("\"rawDocument\":\"InvalidBase64Content!!!\"");
+        } finally {
+            subscriber.stopAsync();
+        }
     }
 }

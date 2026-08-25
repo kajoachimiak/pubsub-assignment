@@ -1,4 +1,4 @@
-package com.pubsub.assignment.configuration;
+package com.pubsub.assignment.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

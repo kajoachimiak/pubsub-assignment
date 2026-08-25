@@ -10,6 +10,7 @@ The application is built with **Spring Boot 3.4.2** and **Java 21**, utilizing a
 * **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using JAXB with `StreamReaderDelegate` to handle XML namespaces dynamically.
 * **OrderMapper**: MapStruct mapper that converts UBL XML objects to the output JSON domain model.
 * **OrderPublisher**: Asynchronously publishes transformed messages to Google Cloud Pub/Sub using `PubSubTemplate`.
+* **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or publishing errors are automatically routed to the `orders.failed` topic.
 * **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) into standard error responses.
 
 ## Prerequisites
@@ -109,6 +110,17 @@ curl -i -X POST http://localhost:8080/api/orders \
 }
 ```
 
+### Dead Letter Queue Message (`orders.failed`)
+
+```json
+{
+  "messageId": "7a1e78c9",
+  "failedAt": "2026-08-25T12:01:00Z",
+  "reason": "Document is not a valid Base64 string.",
+  "rawDocument": "InvalidBase64Content!!!"
+}
+```
+
 ### Error Responses
 
 #### Invalid Base64 (400 Bad Request)
@@ -149,3 +161,12 @@ curl -i -X POST http://localhost:8080/api/orders \
   "message": "An unexpected error occurred.",
   "messageId": "unknown"
 }
+```
+
+## Running Tests
+
+Execute unit and integration tests (which utilize Testcontainers for the GCP Pub/Sub emulator):
+
+```bash
+./gradlew test
+```
