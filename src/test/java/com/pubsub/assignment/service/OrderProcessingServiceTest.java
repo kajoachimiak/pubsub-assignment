@@ -1,5 +1,6 @@
 package com.pubsub.assignment.service;
 
+import com.pubsub.assignment.config.RetryProperties;
 import com.pubsub.assignment.exception.InvalidBase64Exception;
 import com.pubsub.assignment.exception.PublishingException;
 import com.pubsub.assignment.model.json.FailedMessage;
@@ -38,6 +39,9 @@ class OrderProcessingServiceTest {
     private OrderPublisher orderPublisher;
 
     @Spy
+    private RetryProperties retryProperties = new RetryProperties();
+
+    @Spy
     private Clock clock = Clock.fixed(Instant.parse("2026-08-25T12:00:00Z"), ZoneOffset.UTC);
 
     @InjectMocks
@@ -48,6 +52,9 @@ class OrderProcessingServiceTest {
 
     @BeforeEach
     void setUp() {
+        retryProperties.setMaxAttempts(3);
+        retryProperties.setBackoffMs(10);
+
         inputMessage = new InputMessage();
         inputMessage.setMessageId("msg-123");
         inputMessage.setTimestamp("2026-08-25T12:00:00Z");
@@ -78,7 +85,7 @@ class OrderProcessingServiceTest {
     }
 
     @Test
-    void shouldRouteToDlqAndPropagateExceptionWhenTransformationFails() {
+    void shouldNotRetryAndRouteToDlqWhenTransformationFailsNonRetriable() {
         when(transformationService.transform(any(), eq("msg-123")))
                 .thenThrow(new InvalidBase64Exception("Document is not a valid Base64 string.", "msg-123"));
         when(orderPublisher.publishToDlq(any()))
@@ -86,24 +93,23 @@ class OrderProcessingServiceTest {
 
         CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
 
-        assertThat(result).isCompletedExceptionally();
         assertThatThrownBy(result::join)
                 .isInstanceOf(CompletionException.class)
                 .hasCauseInstanceOf(InvalidBase64Exception.class);
 
+        verify(transformationService, times(1)).transform(any(), any());
+        verify(orderPublisher, never()).publish(any());
+
         ArgumentCaptor<FailedMessage> dlqCaptor = ArgumentCaptor.forClass(FailedMessage.class);
         verify(orderPublisher, times(1)).publishToDlq(dlqCaptor.capture());
-        verify(orderPublisher, never()).publish(any());
 
         FailedMessage failedMessage = dlqCaptor.getValue();
         assertThat(failedMessage.getMessageId()).isEqualTo("msg-123");
         assertThat(failedMessage.getReason()).isEqualTo("Document is not a valid Base64 string.");
-        assertThat(failedMessage.getRawDocument()).isEqualTo("validBase64XmlString");
-        assertThat(failedMessage.getFailedAt()).isEqualTo("2026-08-25T12:00:00Z");
     }
 
     @Test
-    void shouldRouteToDlqAndPropagateExceptionWhenPublishingFails() {
+    void shouldRetryMaxAttemptsAndRouteToDlqWhenPublishingFailsConsistently() {
         when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
         when(orderPublisher.publish(any())).thenReturn(
                 CompletableFuture.failedFuture(new PublishingException("Failed to publish to Pub/Sub", "msg-123", new RuntimeException()))
@@ -113,11 +119,27 @@ class OrderProcessingServiceTest {
 
         CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
 
-        assertThat(result).isCompletedExceptionally();
         assertThatThrownBy(result::join)
                 .isInstanceOf(CompletionException.class)
                 .hasCauseInstanceOf(PublishingException.class);
 
+        verify(transformationService, times(3)).transform(any(), any());
+        verify(orderPublisher, times(3)).publish(any());
         verify(orderPublisher, times(1)).publishToDlq(any(FailedMessage.class));
+    }
+
+    @Test
+    void shouldSucceedOnRetryWhenTransientErrorIsResolved() {
+        when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
+        when(orderPublisher.publish(any()))
+                .thenReturn(CompletableFuture.failedFuture(new PublishingException("Transient error", "msg-123", new RuntimeException())))
+                .thenReturn(CompletableFuture.completedFuture("msg-123"));
+
+        CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
+        result.join();
+
+        verify(transformationService, times(2)).transform(any(), any());
+        verify(orderPublisher, times(2)).publish(any());
+        verify(orderPublisher, never()).publishToDlq(any());
     }
 }

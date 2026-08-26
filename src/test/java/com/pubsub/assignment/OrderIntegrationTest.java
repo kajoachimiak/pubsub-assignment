@@ -57,6 +57,7 @@ class OrderIntegrationTest {
         registry.add("spring.cloud.gcp.pubsub.emulator-host", PUB_SUB_EMULATOR::getEmulatorEndpoint);
         registry.add("app.pubsub.output-topic", () -> TOPIC_ID);
         registry.add("app.pubsub.failed-topic", () -> FAILED_TOPIC_ID);
+        registry.add("app.pubsub.retry.backoff-ms", () -> 10);
     }
 
     @BeforeAll

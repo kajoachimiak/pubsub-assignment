@@ -10,7 +10,8 @@ The application is built with **Spring Boot 3.4.2** and **Java 21**, utilizing a
 * **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using JAXB with `StreamReaderDelegate` to handle XML namespaces dynamically.
 * **OrderMapper**: MapStruct mapper that converts UBL XML objects to the output JSON domain model.
 * **OrderPublisher**: Asynchronously publishes transformed messages to Google Cloud Pub/Sub using `PubSubTemplate`.
-* **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or publishing errors are automatically routed to the `orders.failed` topic.
+* **Retry Mechanism**: Configurable asynchronous retries (`app.pubsub.retry.max-attempts`, `app.pubsub.retry.backoff-ms`) for transient errors (e.g., publishing failures). Non-retriable business errors (validation, parsing) bypass retries and are routed immediately to the DLQ.
+* **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or exhausted publishing retries are automatically routed to the `orders.failed` topic.
 * **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) into standard error responses.
 
 ## Prerequisites
