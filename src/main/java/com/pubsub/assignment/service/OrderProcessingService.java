@@ -9,8 +9,10 @@ import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.json.OutputMessage;
 import com.pubsub.assignment.publisher.OrderPublisher;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -28,24 +30,57 @@ public class OrderProcessingService {
 
     private final OrderTransformationService transformationService;
     private final OrderPublisher orderPublisher;
+    private final IdempotencyService idempotencyService;
     private final RetryProperties retryProperties;
     private final Clock clock;
+    private final MeterRegistry meterRegistry;
 
     public CompletableFuture<Void> processOrder(InputMessage inputMessage) {
-        return processWithRetry(inputMessage, 1);
+        long startTime = System.currentTimeMillis();
+        String messageId = inputMessage.getMessageId();
+
+        if (idempotencyService.register(messageId)) {
+            try (var mdc = MDC.putCloseable("messageId", messageId)) {
+                log.info("Duplicate message detected and ignored");
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return processWithRetry(inputMessage, 1)
+                .whenComplete((result, ex) -> {
+                    long duration = System.currentTimeMillis() - startTime;
+                    String status = (ex == null) ? "success" : "error";
+
+                    meterRegistry.timer("order.processing.duration", "status", status)
+                            .record(duration, TimeUnit.MILLISECONDS);
+
+                    try (var mdc = MDC.putCloseable("messageId", messageId)) {
+                        if (ex == null) {
+                            log.info("Processing completed successfully in {} ms", duration);
+                        } else {
+                            idempotencyService.unregister(messageId);
+                            log.error("Processing failed after {} ms", duration);
+                        }
+                    }
+                });
     }
 
     private CompletableFuture<Void> processWithRetry(InputMessage inputMessage, int attempt) {
         String messageId = inputMessage.getMessageId();
-        log.info("Processing message ID: {} (attempt {}/{})", messageId, attempt, retryProperties.getMaxAttempts());
+
+        try (var mdc = MDC.putCloseable("messageId", messageId)) {
+            log.info("Processing message (attempt {}/{})", attempt, retryProperties.getMaxAttempts());
+        }
 
         return executeSingleAttempt(inputMessage)
                 .exceptionallyCompose(ex -> {
                     Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
 
                     if (isRetriable(cause) && attempt < retryProperties.getMaxAttempts()) {
-                        log.warn("Attempt {} failed for message ID: {}. Retrying in {} ms. Cause: {}",
-                                attempt, messageId, retryProperties.getBackoffMs(), cause.getMessage());
+                        try (var mdc = MDC.putCloseable("messageId", messageId)) {
+                            log.warn("Attempt {} failed. Retrying in {} ms. Cause: {}",
+                                    attempt, retryProperties.getBackoffMs(), cause.getMessage());
+                        }
 
                         return CompletableFuture.runAsync(() -> {},
                                         CompletableFuture.delayedExecutor(retryProperties.getBackoffMs(), TimeUnit.MILLISECONDS))
@@ -63,7 +98,11 @@ public class OrderProcessingService {
             OutputMessage outputMessage = createOutputMessage(messageId, orderJson);
 
             return orderPublisher.publish(outputMessage)
-                    .thenAccept(result -> log.info("Successfully completed processing for message ID: {}", messageId));
+                    .thenAccept(result -> {
+                        try (var mdc = MDC.putCloseable("messageId", messageId)) {
+                            log.info("Message transformed and published");
+                        }
+                    });
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
@@ -76,7 +115,9 @@ public class OrderProcessingService {
     }
 
     private CompletableFuture<Void> handleFailure(InputMessage inputMessage, Throwable cause) {
-        log.warn("Routing message ID: {} to DLQ. Reason: {}", inputMessage.getMessageId(), cause.getMessage());
+        try (var mdc = MDC.putCloseable("messageId", inputMessage.getMessageId())) {
+            log.warn("Routing to DLQ. Reason: {}", cause.getMessage());
+        }
 
         FailedMessage failedMessage = FailedMessage.builder()
                 .messageId(inputMessage.getMessageId())
@@ -86,7 +127,7 @@ public class OrderProcessingService {
                 .build();
 
         return orderPublisher.publishToDlq(failedMessage)
-                .thenCompose(dlqResult -> CompletableFuture.failedFuture(cause));
+                .thenApply(dlqResult -> null);
     }
 
     private OutputMessage createOutputMessage(String messageId, OrderJson orderJson) {

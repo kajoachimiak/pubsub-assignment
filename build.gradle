@@ -24,6 +24,7 @@ ext {
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.2'
 	implementation 'org.glassfish.jaxb:jaxb-runtime:4.0.5'
 	implementation 'com.google.cloud:spring-cloud-gcp-starter-pubsub'

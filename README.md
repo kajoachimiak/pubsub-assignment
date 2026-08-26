@@ -4,20 +4,22 @@ This service consumes Base64-encoded UBL 2.1 Order XML payload events via Google
 
 ## Architecture
 
-The application is built with **Spring Boot 3.4.2** and **Java 21**, utilizing an asynchronous non-blocking flow (`CompletableFuture`) for message handling:
+The application is built with Spring Boot 3.4.2 and Java 21, utilizing an asynchronous non-blocking flow (`CompletableFuture`) for message handling:
 
-* **REST Endpoint (`/api/orders`)**: Receives push notifications from Pub/Sub.
-* **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using JAXB with `StreamReaderDelegate` to handle XML namespaces dynamically.
-* **OrderMapper**: MapStruct mapper that converts UBL XML objects to the output JSON domain model.
-* **OrderPublisher**: Asynchronously publishes transformed messages to Google Cloud Pub/Sub using `PubSubTemplate`.
-* **Retry Mechanism**: Configurable asynchronous retries (`app.pubsub.retry.max-attempts`, `app.pubsub.retry.backoff-ms`) for transient errors (e.g., publishing failures). Non-retriable business errors (validation, parsing) bypass retries and are routed immediately to the DLQ.
-* **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or exhausted publishing retries are automatically routed to the `orders.failed` topic.
-* **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) into standard error responses.
+*   **REST Endpoint (`/api/orders`)**: Receives push notifications from Pub/Sub.
+*   **Idempotency**: Utilizes an in-memory Least Recently Used (LRU) cache (via `IdempotencyService`) to track and ignore duplicate `messageId`s, preventing redundant processing and duplicate downstream messages.
+*   **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using JAXB with `StreamReaderDelegate` to handle XML namespaces dynamically.
+*   **OrderMapper**: MapStruct mapper that converts UBL XML objects to the output JSON domain model.
+*   **OrderPublisher**: Asynchronously publishes transformed messages to Google Cloud Pub/Sub using `PubSubTemplate`.
+*   **Retry Mechanism**: Configurable asynchronous retries (`app.pubsub.retry.max-attempts`, `app.pubsub.retry.backoff-ms`) for transient errors (e.g., publishing failures). Non-retriable business errors (validation, parsing) bypass retries and are routed immediately to the DLQ.
+*   **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or exhausted publishing retries are automatically routed to the `orders.failed` topic.
+*   **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) into standard error responses.
+*   **Observability**: Implements structured JSON logging (ECS format) with MDC correlation (including `messageId` and GCP `traceId`), and tracks processing performance using Micrometer/Actuator (`order.processing.duration`).
 
 ## Prerequisites
 
-* Java 21 JDK
-* Docker & Docker Compose
+*   Java 21 JDK
+*   Docker & Docker Compose
 
 ## Getting Started
 
@@ -29,20 +31,31 @@ The environment includes the Spring Boot application and a Google Cloud Pub/Sub 
 docker compose up --build
 ```
 
-The service will start on `http://localhost:8080`, and the Pub/Sub emulator will run on port `8085`. An initialization script automatically creates the required Pub/Sub topics (`orders.transformed` and `orders.failed`).
+The service will start on http://localhost:8080, and the Pub/Sub emulator will run on port 8085. An initialization script automatically creates the required Pub/Sub topics (`orders.transformed` and `orders.failed`).
 
 ### Running Locally
 
-1. Start only the Pub/Sub emulator:
+Start only the Pub/Sub emulator:
 
 ```bash
 docker compose up pubsub-emulator pubsub-init
 ```
 
-2. Run the Spring Boot application:
+Run the Spring Boot application:
 
 ```bash
 ./gradlew bootRun
+```
+
+## Observability
+
+The application includes built-in observability features to monitor and debug processing:
+
+*   **Structured Logging & Correlation**: Console logs are output in ECS-compliant JSON format. Each log entry within the processing flow is automatically correlated with the `messageId` and `traceId` using Mapped Diagnostic Context (MDC).
+*   **Metrics**: Processing duration and attempt counts are tracked using Micrometer. You can view the `order.processing.duration` metric (tagged by `status="success"` or `status="error"`) via the Spring Boot Actuator endpoint:
+
+```bash
+curl -s http://localhost:8080/actuator/metrics/order.processing.duration
 ```
 
 ## How to Test
@@ -122,9 +135,9 @@ curl -i -X POST http://localhost:8080/api/orders \
 }
 ```
 
-### Error Responses
+## Error Responses
 
-#### Invalid Base64 (400 Bad Request)
+### Invalid Base64 (400 Bad Request)
 
 ```json
 {
@@ -134,7 +147,7 @@ curl -i -X POST http://localhost:8080/api/orders \
 }
 ```
 
-#### Invalid XML (400 Bad Request)
+### Invalid XML (400 Bad Request)
 
 ```json
 {
@@ -144,7 +157,7 @@ curl -i -X POST http://localhost:8080/api/orders \
 }
 ```
 
-#### Missing Required Fields (400 Bad Request)
+### Missing Required Fields (400 Bad Request)
 
 ```json
 {
@@ -154,7 +167,7 @@ curl -i -X POST http://localhost:8080/api/orders \
 }
 ```
 
-#### Server Error (500 Internal Server Error)
+### Server Error (500 Internal Server Error)
 
 ```json
 {

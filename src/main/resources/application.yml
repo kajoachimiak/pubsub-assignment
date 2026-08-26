@@ -22,3 +22,12 @@ logging:
   structured:
     format:
       console: ecs
+
+management:
+  health:
+    pubsub:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: metrics

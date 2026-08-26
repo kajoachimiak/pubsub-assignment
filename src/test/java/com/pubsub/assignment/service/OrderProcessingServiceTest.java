@@ -8,6 +8,8 @@ import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.json.OutputMessage;
 import com.pubsub.assignment.publisher.OrderPublisher;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,10 +41,16 @@ class OrderProcessingServiceTest {
     private OrderPublisher orderPublisher;
 
     @Spy
+    private IdempotencyService idempotencyService = new IdempotencyService();
+
+    @Spy
     private RetryProperties retryProperties = new RetryProperties();
 
     @Spy
     private Clock clock = Clock.fixed(Instant.parse("2026-08-25T12:00:00Z"), ZoneOffset.UTC);
+
+    @Spy
+    private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks
     private OrderProcessingService orderProcessingService;
@@ -54,6 +62,7 @@ class OrderProcessingServiceTest {
     void setUp() {
         retryProperties.setMaxAttempts(3);
         retryProperties.setBackoffMs(10);
+        meterRegistry.clear();
 
         inputMessage = new InputMessage();
         inputMessage.setMessageId("msg-123");
@@ -82,6 +91,20 @@ class OrderProcessingServiceTest {
         assertThat(publishedMessage.getMessageId()).isEqualTo("msg-123");
         assertThat(publishedMessage.getTransformedAt()).isEqualTo("2026-08-25T12:00:00Z");
         assertThat(publishedMessage.getOrder()).isEqualTo(mockOrderJson);
+
+        assertThat(meterRegistry.timer("order.processing.duration", "status", "success").count()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldIgnoreDuplicateMessage() {
+        when(idempotencyService.register("msg-123")).thenReturn(true);
+
+        CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
+        result.join();
+
+        verify(transformationService, never()).transform(any(), any());
+        verify(orderPublisher, never()).publish(any());
+        verify(orderPublisher, never()).publishToDlq(any());
     }
 
     @Test
@@ -102,10 +125,13 @@ class OrderProcessingServiceTest {
 
         ArgumentCaptor<FailedMessage> dlqCaptor = ArgumentCaptor.forClass(FailedMessage.class);
         verify(orderPublisher, times(1)).publishToDlq(dlqCaptor.capture());
+        verify(idempotencyService, times(1)).unregister("msg-123");
 
         FailedMessage failedMessage = dlqCaptor.getValue();
         assertThat(failedMessage.getMessageId()).isEqualTo("msg-123");
         assertThat(failedMessage.getReason()).isEqualTo("Document is not a valid Base64 string.");
+
+        assertThat(meterRegistry.timer("order.processing.duration", "status", "error").count()).isEqualTo(1);
     }
 
     @Test
@@ -126,6 +152,9 @@ class OrderProcessingServiceTest {
         verify(transformationService, times(3)).transform(any(), any());
         verify(orderPublisher, times(3)).publish(any());
         verify(orderPublisher, times(1)).publishToDlq(any(FailedMessage.class));
+        verify(idempotencyService, times(1)).unregister("msg-123");
+
+        assertThat(meterRegistry.timer("order.processing.duration", "status", "error").count()).isEqualTo(1);
     }
 
     @Test
@@ -141,5 +170,7 @@ class OrderProcessingServiceTest {
         verify(transformationService, times(2)).transform(any(), any());
         verify(orderPublisher, times(2)).publish(any());
         verify(orderPublisher, never()).publishToDlq(any());
+
+        assertThat(meterRegistry.timer("order.processing.duration", "status", "success").count()).isEqualTo(1);
     }
 }

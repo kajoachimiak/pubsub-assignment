@@ -7,6 +7,7 @@ import com.pubsub.assignment.mapper.OrderMapper;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.xml.OrderXml;
 import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.JAXBException;
 import jakarta.xml.bind.Unmarshaller;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,15 @@ import java.util.Base64;
 public class OrderTransformationService {
 
     private final OrderMapper orderMapper;
+    private static final JAXBContext JAXB_CONTEXT;
+
+    static {
+        try {
+            JAXB_CONTEXT = JAXBContext.newInstance(OrderXml.class);
+        } catch (JAXBException e) {
+            throw new RuntimeException("Failed to initialize JAXB context", e);
+        }
+    }
 
     public OrderJson transform(String base64Document, String messageId) {
         byte[] decodedXmlBytes;
@@ -36,6 +46,8 @@ public class OrderTransformationService {
         OrderJson orderJson;
         try {
             XMLInputFactory xif = XMLInputFactory.newFactory();
+            xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+            xif.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
             XMLStreamReader xsr = xif.createXMLStreamReader(new ByteArrayInputStream(decodedXmlBytes));
 
             XMLStreamReader noNsReader = new StreamReaderDelegate(xsr) {
@@ -45,8 +57,7 @@ public class OrderTransformationService {
                 }
             };
 
-            JAXBContext context = JAXBContext.newInstance(OrderXml.class);
-            Unmarshaller unmarshaller = context.createUnmarshaller();
+            Unmarshaller unmarshaller = JAXB_CONTEXT.createUnmarshaller();
             OrderXml orderXml = (OrderXml) unmarshaller.unmarshal(noNsReader);
 
             orderJson = orderMapper.toOrderJson(orderXml);
