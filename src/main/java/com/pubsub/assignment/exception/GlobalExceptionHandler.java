@@ -50,7 +50,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneralException(Exception ex) {
         log.error("Unexpected error occurred", ex);
-        // Jeśli nie znamy messageId w tym miejscu, wysyłamy "unknown"
         ErrorResponse response = new ErrorResponse("ServerError", "An unexpected error occurred.", "unknown");
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
