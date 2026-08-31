@@ -251,4 +251,72 @@ class OrderIntegrationTest {
             subscriber.stopAsync();
         }
     }
+
+    @Test
+    void shouldRouteMalformedMessageFromSubscriptionToDlqExactlyOnce() throws Exception {
+        String malformedMessageId = "msg-consumer-malformed";
+
+        InputMessage request = new InputMessage();
+        request.setMessageId(malformedMessageId);
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument("InvalidBase64Content!!!");
+
+        ArrayBlockingQueue<String> dlqMessages = new ArrayBlockingQueue<>(10);
+        ManagedChannel channel = ManagedChannelBuilder
+                .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
+                .usePlaintext()
+                .build();
+
+        MessageReceiver receiver = (message, consumer) -> {
+            dlqMessages.add(message.getData().toStringUtf8());
+            consumer.ack();
+        };
+
+        Subscriber subscriber = Subscriber.newBuilder(
+                        ProjectSubscriptionName.of(PROJECT_ID, FAILED_SUBSCRIPTION_ID),
+                        receiver)
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        subscriber.startAsync().awaitRunning();
+
+        Publisher publisher = Publisher.newBuilder(TopicName.of(PROJECT_ID, INPUT_TOPIC_ID))
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        try {
+            String payload = objectMapper.writeValueAsString(request);
+            publisher.publish(PubsubMessage.newBuilder()
+                    .setData(ByteString.copyFromUtf8(payload))
+                    .build());
+
+            String dlqPayload = pollForMessageId(dlqMessages, malformedMessageId, 10);
+            assertThat(dlqPayload).isNotNull();
+            assertThat(dlqPayload).contains("\"reason\":\"Document is not a valid Base64 string.\"");
+
+            String duplicate = pollForMessageId(dlqMessages, malformedMessageId, 3);
+            assertThat(duplicate).isNull();
+        } finally {
+            publisher.shutdown();
+            subscriber.stopAsync();
+        }
+    }
+
+    private static String pollForMessageId(ArrayBlockingQueue<String> queue, String messageId, long timeoutSeconds)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        while (System.nanoTime() < deadline) {
+            long remaining = deadline - System.nanoTime();
+            String message = queue.poll(remaining, TimeUnit.NANOSECONDS);
+            if (message == null) {
+                return null;
+            }
+            if (message.contains("\"messageId\":\"" + messageId + "\"")) {
+                return message;
+            }
+        }
+        return null;
+    }
 }

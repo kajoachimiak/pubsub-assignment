@@ -3,7 +3,7 @@ package com.pubsub.assignment.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.cloud.spring.pubsub.support.BasicAcknowledgeablePubsubMessage;
 import com.google.cloud.spring.pubsub.support.GcpPubSubHeaders;
-import com.pubsub.assignment.exception.ProcessingException;
+import com.pubsub.assignment.exception.DlqRoutingException;
 import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.service.OrderProcessingService;
 import lombok.RequiredArgsConstructor;
@@ -55,10 +55,10 @@ public class OrderMessageConsumer {
                     }
                     if (ex == null) {
                         ackable.ack();
-                    } else if (unwrap(ex) instanceof ProcessingException) {
-                        ackable.ack();
-                    } else {
+                    } else if (unwrap(ex) instanceof DlqRoutingException) {
                         ackable.nack();
+                    } else {
+                        ackable.ack();
                     }
                 });
     }

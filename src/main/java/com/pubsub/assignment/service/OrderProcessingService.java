@@ -1,6 +1,7 @@
 package com.pubsub.assignment.service;
 
 import com.pubsub.assignment.config.RetryProperties;
+import com.pubsub.assignment.exception.DlqRoutingException;
 import com.pubsub.assignment.exception.InvalidBase64Exception;
 import com.pubsub.assignment.exception.InvalidXmlException;
 import com.pubsub.assignment.exception.MissingFieldException;
@@ -57,9 +58,11 @@ public class OrderProcessingService {
                     try (var mdc = MDC.putCloseable("messageId", messageId)) {
                         if (ex == null) {
                             log.info("Processing completed successfully in {} ms", duration);
-                        } else {
+                        } else if (unwrap(ex) instanceof DlqRoutingException) {
                             idempotencyService.unregister(messageId);
-                            log.error("Processing failed after {} ms", duration);
+                            log.error("Processing failed and DLQ routing failed after {} ms; message will be redelivered", duration);
+                        } else {
+                            log.error("Processing failed after {} ms; message routed to DLQ", duration);
                         }
                     }
                 });
@@ -74,7 +77,7 @@ public class OrderProcessingService {
 
         return executeSingleAttempt(inputMessage)
                 .exceptionallyCompose(ex -> {
-                    Throwable cause = ex instanceof CompletionException ? ex.getCause() : ex;
+                    Throwable cause = unwrap(ex);
 
                     if (isRetriable(cause) && attempt < retryProperties.getMaxAttempts()) {
                         try (var mdc = MDC.putCloseable("messageId", messageId)) {
@@ -127,7 +130,20 @@ public class OrderProcessingService {
                 .build();
 
         return orderPublisher.publishToDlq(failedMessage)
-                .thenCompose(dlqResult -> CompletableFuture.<Void>failedFuture(cause));
+                .handle((dlqResult, dlqEx) -> dlqEx)
+                .thenCompose(dlqEx -> {
+                    if (dlqEx == null) {
+                        return CompletableFuture.<Void>failedFuture(cause);
+                    }
+
+                    Throwable dlqCause = unwrap(dlqEx);
+                    try (var mdc = MDC.putCloseable("messageId", inputMessage.getMessageId())) {
+                        log.error("Failed to route message to DLQ; message will be redelivered", dlqCause);
+                    }
+
+                    return CompletableFuture.<Void>failedFuture(
+                            new DlqRoutingException("Failed to route message to DLQ.", inputMessage.getMessageId(), dlqCause));
+                });
     }
 
     public CompletableFuture<Void> routeToDlq(String messageId, String rawDocument, String reason) {
@@ -155,5 +171,9 @@ public class OrderProcessingService {
 
     private String nowIso() {
         return DateTimeFormatter.ISO_INSTANT.format(Instant.now(clock).atOffset(ZoneOffset.UTC));
+    }
+
+    private Throwable unwrap(Throwable ex) {
+        return (ex instanceof CompletionException && ex.getCause() != null) ? ex.getCause() : ex;
     }
 }

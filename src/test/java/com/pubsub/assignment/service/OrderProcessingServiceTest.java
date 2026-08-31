@@ -1,6 +1,7 @@
 package com.pubsub.assignment.service;
 
 import com.pubsub.assignment.config.RetryProperties;
+import com.pubsub.assignment.exception.DlqRoutingException;
 import com.pubsub.assignment.exception.InvalidBase64Exception;
 import com.pubsub.assignment.exception.PublishingException;
 import com.pubsub.assignment.model.json.FailedMessage;
@@ -125,7 +126,7 @@ class OrderProcessingServiceTest {
 
         ArgumentCaptor<FailedMessage> dlqCaptor = ArgumentCaptor.forClass(FailedMessage.class);
         verify(orderPublisher, times(1)).publishToDlq(dlqCaptor.capture());
-        verify(idempotencyService, times(1)).unregister("msg-123");
+        verify(idempotencyService, never()).unregister("msg-123");
 
         FailedMessage failedMessage = dlqCaptor.getValue();
         assertThat(failedMessage.getMessageId()).isEqualTo("msg-123");
@@ -151,6 +152,27 @@ class OrderProcessingServiceTest {
 
         verify(transformationService, times(3)).transform(any(), any());
         verify(orderPublisher, times(3)).publish(any());
+        verify(orderPublisher, times(1)).publishToDlq(any(FailedMessage.class));
+        verify(idempotencyService, never()).unregister("msg-123");
+
+        assertThat(meterRegistry.timer("order.processing.duration", "status", "error").count()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldThrowDlqRoutingExceptionAndUnregisterWhenDlqRoutingFails() {
+        when(transformationService.transform(any(), eq("msg-123")))
+                .thenThrow(new InvalidBase64Exception("Document is not a valid Base64 string.", "msg-123"));
+        when(orderPublisher.publishToDlq(any()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("DLQ publish failed")));
+
+        CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
+
+        assertThatThrownBy(result::join)
+                .isInstanceOf(CompletionException.class)
+                .hasCauseInstanceOf(DlqRoutingException.class);
+
+        verify(transformationService, times(1)).transform(any(), any());
+        verify(orderPublisher, never()).publish(any());
         verify(orderPublisher, times(1)).publishToDlq(any(FailedMessage.class));
         verify(idempotencyService, times(1)).unregister("msg-123");
 
