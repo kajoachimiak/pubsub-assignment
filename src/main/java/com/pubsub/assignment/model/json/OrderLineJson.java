@@ -2,11 +2,13 @@ package com.pubsub.assignment.model.json;
 
 import lombok.Data;
 
+import java.math.BigDecimal;
+
 @Data
 public class OrderLineJson {
-    private Integer lineId;
+    private String lineId;
     private String itemId;
-    private Integer quantity;
+    private BigDecimal quantity;
     private String unitOfMeasure;
     private String comment;
 }

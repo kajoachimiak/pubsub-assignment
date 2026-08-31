@@ -8,6 +8,6 @@ import lombok.Data;
 @Data
 @XmlAccessorType(XmlAccessType.FIELD)
 public class BuyerCustomerPartyXml {
-    @XmlElement(name = "SupplierAssignedAccountID")
+    @XmlElement(name = "SupplierAssignedAccountID", namespace = UblNamespaces.CBC)
     private String supplierAssignedAccountID;
 }

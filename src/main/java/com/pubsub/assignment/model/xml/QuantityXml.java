@@ -6,6 +6,8 @@ import jakarta.xml.bind.annotation.XmlAttribute;
 import jakarta.xml.bind.annotation.XmlValue;
 import lombok.Data;
 
+import java.math.BigDecimal;
+
 @Data
 @XmlAccessorType(XmlAccessType.FIELD)
 public class QuantityXml {
@@ -13,5 +15,5 @@ public class QuantityXml {
     private String unitCode;
 
     @XmlValue
-    private Integer value;
+    private BigDecimal value;
 }

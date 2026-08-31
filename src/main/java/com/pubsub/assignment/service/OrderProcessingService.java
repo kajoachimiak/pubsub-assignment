@@ -10,6 +10,7 @@ import com.pubsub.assignment.model.json.InputMessage;
 import com.pubsub.assignment.model.json.OrderJson;
 import com.pubsub.assignment.model.json.OutputMessage;
 import com.pubsub.assignment.publisher.OrderPublisher;
+import com.pubsub.assignment.util.MdcContext;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
@@ -49,9 +51,13 @@ public class OrderProcessingService {
             return CompletableFuture.completedFuture(null);
         }
 
-        return CompletableFuture.supplyAsync(() -> transformOrHandleFailure(inputMessage), processingExecutor)
+        Map<String, String> mdcContext = MdcContext.capture();
+
+        return CompletableFuture.supplyAsync(
+                        MdcContext.wrap(mdcContext, () -> transformOrHandleFailure(inputMessage, mdcContext)),
+                        processingExecutor)
                 .thenCompose(future -> future)
-                .whenComplete((result, ex) -> {
+                .whenComplete(MdcContext.wrap(mdcContext, (result, ex) -> {
                     long duration = System.currentTimeMillis() - startTime;
                     String status = (ex == null) ? "success" : "error";
 
@@ -68,15 +74,15 @@ public class OrderProcessingService {
                             log.error("Processing failed after {} ms; message routed to DLQ", duration);
                         }
                     }
-                });
+                }));
     }
 
-    private CompletableFuture<Void> transformOrHandleFailure(InputMessage inputMessage) {
+    private CompletableFuture<Void> transformOrHandleFailure(InputMessage inputMessage, Map<String, String> mdcContext) {
         try {
             OutputMessage outputMessage = transformToOutputMessage(inputMessage);
-            return processWithRetry(inputMessage, outputMessage, 1);
+            return processWithRetry(inputMessage, outputMessage, 1, mdcContext);
         } catch (Exception e) {
-            return handleFailure(inputMessage, e);
+            return handleFailure(inputMessage, e, mdcContext);
         }
     }
 
@@ -86,15 +92,15 @@ public class OrderProcessingService {
         return createOutputMessage(messageId, orderJson);
     }
 
-    private CompletableFuture<Void> processWithRetry(InputMessage inputMessage, OutputMessage outputMessage, int attempt) {
+    private CompletableFuture<Void> processWithRetry(InputMessage inputMessage, OutputMessage outputMessage, int attempt, Map<String, String> mdcContext) {
         String messageId = inputMessage.getMessageId();
 
         try (var mdc = MDC.putCloseable("messageId", messageId)) {
             log.info("Processing message (attempt {}/{})", attempt, retryProperties.getMaxAttempts());
         }
 
-        return executeSingleAttempt(messageId, outputMessage)
-                .exceptionallyCompose(ex -> {
+        return executeSingleAttempt(messageId, outputMessage, mdcContext)
+                .exceptionallyCompose(MdcContext.wrap(mdcContext, ex -> {
                     Throwable cause = unwrap(ex);
 
                     if (isRetriable(cause) && attempt < retryProperties.getMaxAttempts()) {
@@ -105,21 +111,21 @@ public class OrderProcessingService {
 
                         return CompletableFuture.runAsync(() -> {},
                                         CompletableFuture.delayedExecutor(retryProperties.getBackoffMs(), TimeUnit.MILLISECONDS))
-                                .thenCompose(v -> processWithRetry(inputMessage, outputMessage, attempt + 1));
+                                .thenCompose(v -> processWithRetry(inputMessage, outputMessage, attempt + 1, mdcContext));
                     }
 
-                    return handleFailure(inputMessage, cause);
-                });
+                    return handleFailure(inputMessage, cause, mdcContext);
+                }));
     }
 
-    private CompletableFuture<Void> executeSingleAttempt(String messageId, OutputMessage outputMessage) {
+    private CompletableFuture<Void> executeSingleAttempt(String messageId, OutputMessage outputMessage, Map<String, String> mdcContext) {
         try {
             return orderPublisher.publish(outputMessage)
-                    .thenAccept(result -> {
+                    .thenAccept(MdcContext.wrap(mdcContext, result -> {
                         try (var mdc = MDC.putCloseable("messageId", messageId)) {
                             log.info("Message transformed and published");
                         }
-                    });
+                    }));
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
@@ -131,7 +137,7 @@ public class OrderProcessingService {
                 || cause instanceof MissingFieldException);
     }
 
-    private CompletableFuture<Void> handleFailure(InputMessage inputMessage, Throwable cause) {
+    private CompletableFuture<Void> handleFailure(InputMessage inputMessage, Throwable cause, Map<String, String> mdcContext) {
         try (var mdc = MDC.putCloseable("messageId", inputMessage.getMessageId())) {
             log.warn("Routing to DLQ. Reason: {}", cause.getMessage());
         }
@@ -145,7 +151,7 @@ public class OrderProcessingService {
 
         return orderPublisher.publishToDlq(failedMessage)
                 .handle((dlqResult, dlqEx) -> dlqEx)
-                .thenCompose(dlqEx -> {
+                .thenCompose(MdcContext.wrap(mdcContext, dlqEx -> {
                     if (dlqEx == null) {
                         return CompletableFuture.<Void>failedFuture(cause);
                     }
@@ -157,7 +163,7 @@ public class OrderProcessingService {
 
                     return CompletableFuture.<Void>failedFuture(
                             new DlqRoutingException("Failed to route message to DLQ.", inputMessage.getMessageId(), dlqCause));
-                });
+                }));
     }
 
     public CompletableFuture<Void> routeToDlq(String messageId, String rawDocument, String reason) {

@@ -8,9 +8,9 @@ import lombok.Data;
 @Data
 @XmlAccessorType(XmlAccessType.FIELD)
 public class OrderLineXml {
-    @XmlElement(name = "Note")
+    @XmlElement(name = "Note", namespace = UblNamespaces.CBC)
     private String note;
 
-    @XmlElement(name = "LineItem")
+    @XmlElement(name = "LineItem", namespace = UblNamespaces.CAC)
     private LineItemXml lineItem;
 }

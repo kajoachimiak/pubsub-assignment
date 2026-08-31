@@ -8,22 +8,22 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-@XmlRootElement(name = "Order")
+@XmlRootElement(name = "Order", namespace = UblNamespaces.ORDER)
 @XmlAccessorType(XmlAccessType.FIELD)
 public class OrderXml {
 
-    @XmlElement(name = "ID")
+    @XmlElement(name = "ID", namespace = UblNamespaces.CBC)
     private String id;
 
-    @XmlElement(name = "IssueDate")
+    @XmlElement(name = "IssueDate", namespace = UblNamespaces.CBC)
     private String issueDate;
 
-    @XmlElement(name = "CustomerReference")
+    @XmlElement(name = "CustomerReference", namespace = UblNamespaces.CBC)
     private String customerReference;
 
-    @XmlElement(name = "BuyerCustomerParty")
+    @XmlElement(name = "BuyerCustomerParty", namespace = UblNamespaces.CAC)
     private BuyerCustomerPartyXml buyerCustomerParty;
 
-    @XmlElement(name = "OrderLine")
+    @XmlElement(name = "OrderLine", namespace = UblNamespaces.CAC)
     private List<OrderLineXml> orderLines;
 }

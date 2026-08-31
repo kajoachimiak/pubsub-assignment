@@ -8,12 +8,12 @@ import lombok.Data;
 @Data
 @XmlAccessorType(XmlAccessType.FIELD)
 public class LineItemXml {
-    @XmlElement(name = "ID")
-    private Integer id;
+    @XmlElement(name = "ID", namespace = UblNamespaces.CBC)
+    private String id;
 
-    @XmlElement(name = "Quantity")
+    @XmlElement(name = "Quantity", namespace = UblNamespaces.CBC)
     private QuantityXml quantity;
 
-    @XmlElement(name = "Item")
+    @XmlElement(name = "Item", namespace = UblNamespaces.CAC)
     private ItemXml item;
 }
