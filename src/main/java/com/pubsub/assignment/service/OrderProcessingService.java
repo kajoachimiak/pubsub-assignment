@@ -127,7 +127,7 @@ public class OrderProcessingService {
                 .build();
 
         return orderPublisher.publishToDlq(failedMessage)
-                .thenApply(dlqResult -> null);
+                .thenCompose(dlqResult -> CompletableFuture.<Void>failedFuture(cause));
     }
 
     private OutputMessage createOutputMessage(String messageId, OrderJson orderJson) {
