@@ -6,7 +6,8 @@ This service consumes Base64-encoded UBL 2.1 Order XML payload events via Google
 
 The application is built with Spring Boot 3.4.2 and Java 21, utilizing an asynchronous non-blocking flow (`CompletableFuture`) for message handling:
 
-*   **REST Endpoint (`/api/orders`)**: Receives push notifications from Pub/Sub.
+*   **REST Endpoint (`/api/orders`)**: Accepts an order message directly via HTTP POST for synchronous/manual submission.
+*   **Pub/Sub Consumer**: A Spring Integration `PubSubInboundChannelAdapter` pulls messages from the `app.pubsub.input-subscription` subscription and routes them through the same processing pipeline.
 *   **Idempotency**: Utilizes an in-memory Least Recently Used (LRU) cache (via `IdempotencyService`) to track and ignore duplicate `messageId`s, preventing redundant processing and duplicate downstream messages.
 *   **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using namespace-aware JAXB bindings (`@XmlSchema`/`@XmlElement(namespace = ...)`) matching the official `Order-2`, `cbc`, and `cac` UBL namespaces.
 *   **OrderMapper**: MapStruct mapper that converts UBL XML objects to the output JSON domain model.
@@ -57,6 +58,8 @@ The application includes built-in observability features to monitor and debug pr
 ```bash
 curl -s http://localhost:8080/actuator/metrics/order.processing.duration
 ```
+
+*   **Health & Readiness Probes**: The Actuator exposes `/actuator/health`, plus `/actuator/health/liveness` and `/actuator/health/readiness` group endpoints suitable for Cloud Run startup/liveness probes. (`management.health.pubsub` is disabled because `spring-cloud-gcp-starter-pubsub` 4.1.1's Pub/Sub health indicator is incompatible with Spring Boot 3.4.2's Actuator and crashes the application context on startup.)
 
 ## How to Test
 

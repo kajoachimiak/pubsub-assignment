@@ -25,10 +25,23 @@ logging:
       console: ecs
 
 management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
   health:
+    # Disabled: spring-cloud-gcp-starter-pubsub 4.1.1's PubSubHealthIndicatorAutoConfiguration
+    # is binary-incompatible with Spring Boot 3.4.2's Actuator (NoSuchMethodError on
+    # CompositeHealthContributorConfiguration's no-arg constructor), which crashes the
+    # application context on startup if enabled.
     pubsub:
       enabled: false
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
   endpoints:
     web:
       exposure:
-        include: metrics
+        include: health,metrics

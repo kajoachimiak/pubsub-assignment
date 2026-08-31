@@ -26,8 +26,8 @@ public class OrderController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    public CompletableFuture<ResponseEntity<Void>> handlePubSubPush(@Valid @RequestBody InputMessage inputMessage) {
-        log.debug("Received push notification for message ID: {}", inputMessage.getMessageId());
+    public CompletableFuture<ResponseEntity<Void>> submitOrder(@Valid @RequestBody InputMessage inputMessage) {
+        log.debug("Received order message for message ID: {}", inputMessage.getMessageId());
 
         return orderProcessingService.processOrder(inputMessage)
                 .thenApply(v -> ResponseEntity.ok().<Void>build());

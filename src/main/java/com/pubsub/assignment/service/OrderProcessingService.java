@@ -16,11 +16,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -50,6 +51,8 @@ public class OrderProcessingService {
             }
             return CompletableFuture.completedFuture(null);
         }
+
+        recordMessageAge(inputMessage);
 
         Map<String, String> mdcContext = MdcContext.capture();
 
@@ -190,7 +193,23 @@ public class OrderProcessingService {
     }
 
     private String nowIso() {
-        return DateTimeFormatter.ISO_INSTANT.format(Instant.now(clock).atOffset(ZoneOffset.UTC));
+        return clock.instant().toString();
+    }
+
+    private void recordMessageAge(InputMessage inputMessage) {
+        String timestamp = inputMessage.getTimestamp();
+        if (!StringUtils.hasText(timestamp)) {
+            return;
+        }
+
+        try {
+            Duration age = Duration.between(Instant.parse(timestamp), clock.instant());
+            meterRegistry.timer("order.message.age").record(age);
+        } catch (DateTimeParseException e) {
+            try (var mdc = MDC.putCloseable("messageId", inputMessage.getMessageId())) {
+                log.warn("Ignoring unparseable message timestamp: {}", timestamp);
+            }
+        }
     }
 
     private Throwable unwrap(Throwable ex) {

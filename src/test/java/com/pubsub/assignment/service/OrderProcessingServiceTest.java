@@ -209,6 +209,28 @@ class OrderProcessingServiceTest {
     }
 
     @Test
+    void shouldRecordMessageAgeMetricWhenTimestampIsPresent() {
+        when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
+        when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));
+
+        orderProcessingService.processOrder(inputMessage).join();
+
+        assertThat(meterRegistry.timer("order.message.age").count()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldIgnoreUnparseableTimestampAndStillProcessMessage() {
+        inputMessage.setTimestamp("not-a-valid-timestamp");
+        when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
+        when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));
+
+        orderProcessingService.processOrder(inputMessage).join();
+
+        assertThat(meterRegistry.find("order.message.age").timer()).isNull();
+        verify(orderPublisher, times(1)).publish(any());
+    }
+
+    @Test
     void shouldDispatchInitialProcessingAttemptViaProcessingExecutor() {
         when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
         when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));

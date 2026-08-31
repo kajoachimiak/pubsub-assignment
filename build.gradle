@@ -17,10 +17,6 @@ repositories {
 	mavenCentral()
 }
 
-ext {
-	set('springCloudVersion', "2025.1.2")
-}
-
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
@@ -52,8 +48,5 @@ dependencyManagement {
 
 tasks.named('test') {
 	useJUnitPlatform()
-	systemProperty "api.version", "1.44"
-	systemProperty "DOCKER_API_VERSION", "1.44"
-	environment "DOCKER_API_VERSION", "1.44"
 	environment "DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock"
 }
