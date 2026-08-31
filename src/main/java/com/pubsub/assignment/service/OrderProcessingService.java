@@ -49,7 +49,7 @@ public class OrderProcessingService {
             return CompletableFuture.completedFuture(null);
         }
 
-        return CompletableFuture.supplyAsync(() -> processWithRetry(inputMessage, 1), processingExecutor)
+        return CompletableFuture.supplyAsync(() -> transformOrHandleFailure(inputMessage), processingExecutor)
                 .thenCompose(future -> future)
                 .whenComplete((result, ex) -> {
                     long duration = System.currentTimeMillis() - startTime;
@@ -71,14 +71,29 @@ public class OrderProcessingService {
                 });
     }
 
-    private CompletableFuture<Void> processWithRetry(InputMessage inputMessage, int attempt) {
+    private CompletableFuture<Void> transformOrHandleFailure(InputMessage inputMessage) {
+        try {
+            OutputMessage outputMessage = transformToOutputMessage(inputMessage);
+            return processWithRetry(inputMessage, outputMessage, 1);
+        } catch (Exception e) {
+            return handleFailure(inputMessage, e);
+        }
+    }
+
+    private OutputMessage transformToOutputMessage(InputMessage inputMessage) {
+        String messageId = inputMessage.getMessageId();
+        OrderJson orderJson = transformationService.transform(inputMessage.getDocument(), messageId);
+        return createOutputMessage(messageId, orderJson);
+    }
+
+    private CompletableFuture<Void> processWithRetry(InputMessage inputMessage, OutputMessage outputMessage, int attempt) {
         String messageId = inputMessage.getMessageId();
 
         try (var mdc = MDC.putCloseable("messageId", messageId)) {
             log.info("Processing message (attempt {}/{})", attempt, retryProperties.getMaxAttempts());
         }
 
-        return executeSingleAttempt(inputMessage)
+        return executeSingleAttempt(messageId, outputMessage)
                 .exceptionallyCompose(ex -> {
                     Throwable cause = unwrap(ex);
 
@@ -90,19 +105,15 @@ public class OrderProcessingService {
 
                         return CompletableFuture.runAsync(() -> {},
                                         CompletableFuture.delayedExecutor(retryProperties.getBackoffMs(), TimeUnit.MILLISECONDS))
-                                .thenCompose(v -> processWithRetry(inputMessage, attempt + 1));
+                                .thenCompose(v -> processWithRetry(inputMessage, outputMessage, attempt + 1));
                     }
 
                     return handleFailure(inputMessage, cause);
                 });
     }
 
-    private CompletableFuture<Void> executeSingleAttempt(InputMessage inputMessage) {
+    private CompletableFuture<Void> executeSingleAttempt(String messageId, OutputMessage outputMessage) {
         try {
-            String messageId = inputMessage.getMessageId();
-            OrderJson orderJson = transformationService.transform(inputMessage.getDocument(), messageId);
-            OutputMessage outputMessage = createOutputMessage(messageId, orderJson);
-
             return orderPublisher.publish(outputMessage)
                     .thenAccept(result -> {
                         try (var mdc = MDC.putCloseable("messageId", messageId)) {

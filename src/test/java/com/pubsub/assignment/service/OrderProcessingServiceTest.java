@@ -162,7 +162,7 @@ class OrderProcessingServiceTest {
                 .isInstanceOf(CompletionException.class)
                 .hasCauseInstanceOf(PublishingException.class);
 
-        verify(transformationService, times(3)).transform(any(), any());
+        verify(transformationService, times(1)).transform(any(), any());
         verify(orderPublisher, times(3)).publish(any());
         verify(orderPublisher, times(1)).publishToDlq(any(FailedMessage.class));
         verify(idempotencyService, never()).unregister("msg-123");
@@ -201,7 +201,7 @@ class OrderProcessingServiceTest {
         CompletableFuture<Void> result = orderProcessingService.processOrder(inputMessage);
         result.join();
 
-        verify(transformationService, times(2)).transform(any(), any());
+        verify(transformationService, times(1)).transform(any(), any());
         verify(orderPublisher, times(2)).publish(any());
         verify(orderPublisher, never()).publishToDlq(any());
 
