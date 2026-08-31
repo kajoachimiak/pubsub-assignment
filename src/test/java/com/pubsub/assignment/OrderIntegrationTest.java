@@ -4,10 +4,14 @@ import com.google.api.gax.core.NoCredentialsProvider;
 import com.google.api.gax.grpc.GrpcTransportChannel;
 import com.google.api.gax.rpc.FixedTransportChannelProvider;
 import com.google.api.gax.rpc.TransportChannelProvider;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.cloud.pubsub.v1.*;
+import com.google.protobuf.ByteString;
 import com.google.pubsub.v1.ProjectSubscriptionName;
 import com.google.pubsub.v1.ProjectTopicName;
+import com.google.pubsub.v1.PubsubMessage;
 import com.google.pubsub.v1.PushConfig;
+import com.google.pubsub.v1.TopicName;
 import com.pubsub.assignment.model.json.ErrorResponse;
 import com.pubsub.assignment.model.json.InputMessage;
 import io.grpc.ManagedChannel;
@@ -40,6 +44,8 @@ class OrderIntegrationTest {
     private static final String PROJECT_ID = "test-project";
     private static final String TOPIC_ID = "orders.transformed";
     private static final String FAILED_TOPIC_ID = "orders.failed";
+    private static final String INPUT_TOPIC_ID = "orders.ubl";
+    private static final String INPUT_SUBSCRIPTION_ID = "orders.ubl.received";
     private static final String SUBSCRIPTION_ID = "test-subscription";
     private static final String FAILED_SUBSCRIPTION_ID = "test-failed-subscription";
 
@@ -51,10 +57,14 @@ class OrderIntegrationTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.cloud.gcp.project-id", () -> PROJECT_ID);
         registry.add("spring.cloud.gcp.pubsub.emulator-host", PUB_SUB_EMULATOR::getEmulatorEndpoint);
+        registry.add("app.pubsub.input-subscription", () -> INPUT_SUBSCRIPTION_ID);
         registry.add("app.pubsub.output-topic", () -> TOPIC_ID);
         registry.add("app.pubsub.failed-topic", () -> FAILED_TOPIC_ID);
         registry.add("app.pubsub.retry.backoff-ms", () -> 10);
@@ -76,6 +86,7 @@ class OrderIntegrationTest {
                         .build())) {
             topicAdminClient.createTopic(ProjectTopicName.of(PROJECT_ID, TOPIC_ID));
             topicAdminClient.createTopic(ProjectTopicName.of(PROJECT_ID, FAILED_TOPIC_ID));
+            topicAdminClient.createTopic(ProjectTopicName.of(PROJECT_ID, INPUT_TOPIC_ID));
         }
 
         try (SubscriptionAdminClient subscriptionAdminClient = SubscriptionAdminClient.create(
@@ -92,6 +103,12 @@ class OrderIntegrationTest {
             subscriptionAdminClient.createSubscription(
                     ProjectSubscriptionName.of(PROJECT_ID, FAILED_SUBSCRIPTION_ID),
                     ProjectTopicName.of(PROJECT_ID, FAILED_TOPIC_ID),
+                    PushConfig.getDefaultInstance(),
+                    10);
+
+            subscriptionAdminClient.createSubscription(
+                    ProjectSubscriptionName.of(PROJECT_ID, INPUT_SUBSCRIPTION_ID),
+                    ProjectTopicName.of(PROJECT_ID, INPUT_TOPIC_ID),
                     PushConfig.getDefaultInstance(),
                     10);
         }
@@ -180,6 +197,57 @@ class OrderIntegrationTest {
             assertThat(dlqPayload).contains("\"reason\":\"Document is not a valid Base64 string.\"");
             assertThat(dlqPayload).contains("\"rawDocument\":\"InvalidBase64Content!!!\"");
         } finally {
+            subscriber.stopAsync();
+        }
+    }
+
+    @Test
+    void shouldConsumeFromSubscriptionAndPublishTransformed() throws Exception {
+        String validXml = "<Order><ID>77777</ID></Order>";
+        String base64Xml = Base64.getEncoder().encodeToString(validXml.getBytes());
+
+        InputMessage request = new InputMessage();
+        request.setMessageId("msg-subscription-1");
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument(base64Xml);
+
+        ArrayBlockingQueue<String> receivedMessages = new ArrayBlockingQueue<>(1);
+        ManagedChannel channel = ManagedChannelBuilder
+                .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
+                .usePlaintext()
+                .build();
+
+        MessageReceiver receiver = (message, consumer) -> {
+            receivedMessages.add(message.getData().toStringUtf8());
+            consumer.ack();
+        };
+
+        Subscriber subscriber = Subscriber.newBuilder(
+                        ProjectSubscriptionName.of(PROJECT_ID, SUBSCRIPTION_ID),
+                        receiver)
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        subscriber.startAsync().awaitRunning();
+
+        Publisher publisher = Publisher.newBuilder(TopicName.of(PROJECT_ID, INPUT_TOPIC_ID))
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        try {
+            String payload = objectMapper.writeValueAsString(request);
+            publisher.publish(PubsubMessage.newBuilder()
+                    .setData(ByteString.copyFromUtf8(payload))
+                    .build());
+
+            String publishedPayload = receivedMessages.poll(10, TimeUnit.SECONDS);
+            assertThat(publishedPayload).isNotNull();
+            assertThat(publishedPayload).contains("\"messageId\":\"msg-subscription-1\"");
+            assertThat(publishedPayload).contains("\"orderId\":\"77777\"");
+        } finally {
+            publisher.shutdown();
             subscriber.stopAsync();
         }
     }

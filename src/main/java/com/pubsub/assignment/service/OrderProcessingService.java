@@ -121,7 +121,7 @@ public class OrderProcessingService {
 
         FailedMessage failedMessage = FailedMessage.builder()
                 .messageId(inputMessage.getMessageId())
-                .failedAt(DateTimeFormatter.ISO_INSTANT.format(Instant.now(clock).atOffset(ZoneOffset.UTC)))
+                .failedAt(nowIso())
                 .reason(cause.getMessage())
                 .rawDocument(inputMessage.getDocument())
                 .build();
@@ -130,11 +130,30 @@ public class OrderProcessingService {
                 .thenCompose(dlqResult -> CompletableFuture.<Void>failedFuture(cause));
     }
 
+    public CompletableFuture<Void> routeToDlq(String messageId, String rawDocument, String reason) {
+        try (var mdc = MDC.putCloseable("messageId", messageId)) {
+            log.warn("Routing malformed message to DLQ. Reason: {}", reason);
+        }
+
+        FailedMessage failedMessage = FailedMessage.builder()
+                .messageId(messageId)
+                .failedAt(nowIso())
+                .reason(reason)
+                .rawDocument(rawDocument)
+                .build();
+
+        return orderPublisher.publishToDlq(failedMessage).thenAccept(dlqResult -> {});
+    }
+
     private OutputMessage createOutputMessage(String messageId, OrderJson orderJson) {
         OutputMessage outputMessage = new OutputMessage();
         outputMessage.setMessageId(messageId);
-        outputMessage.setTransformedAt(DateTimeFormatter.ISO_INSTANT.format(Instant.now(clock).atOffset(ZoneOffset.UTC)));
+        outputMessage.setTransformedAt(nowIso());
         outputMessage.setOrder(orderJson);
         return outputMessage;
+    }
+
+    private String nowIso() {
+        return DateTimeFormatter.ISO_INSTANT.format(Instant.now(clock).atOffset(ZoneOffset.UTC));
     }
 }
