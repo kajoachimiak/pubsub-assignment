@@ -9,6 +9,7 @@ spring:
 
 app:
   pubsub:
+    input-subscription: orders.ubl.received
     output-topic: orders.transformed
     failed-topic: orders.failed
     retry:
