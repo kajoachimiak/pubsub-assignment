@@ -25,6 +25,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -53,6 +56,9 @@ class OrderProcessingServiceTest {
     @Spy
     private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
+    @Mock
+    private Executor processingExecutor;
+
     @InjectMocks
     private OrderProcessingService orderProcessingService;
 
@@ -64,6 +70,12 @@ class OrderProcessingServiceTest {
         retryProperties.setMaxAttempts(3);
         retryProperties.setBackoffMs(10);
         meterRegistry.clear();
+
+        lenient().doAnswer(invocation -> {
+            Runnable task = invocation.getArgument(0);
+            task.run();
+            return null;
+        }).when(processingExecutor).execute(any(Runnable.class));
 
         inputMessage = new InputMessage();
         inputMessage.setMessageId("msg-123");
@@ -194,5 +206,37 @@ class OrderProcessingServiceTest {
         verify(orderPublisher, never()).publishToDlq(any());
 
         assertThat(meterRegistry.timer("order.processing.duration", "status", "success").count()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldDispatchInitialProcessingAttemptViaProcessingExecutor() {
+        when(transformationService.transform(any(), eq("msg-123"))).thenReturn(mockOrderJson);
+        when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));
+
+        orderProcessingService.processOrder(inputMessage).join();
+
+        verify(processingExecutor, times(1)).execute(any(Runnable.class));
+    }
+
+    @Test
+    void shouldExecuteInitialProcessingAttemptOffTheCallingThread() {
+        Executor realExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        OrderProcessingService serviceWithRealExecutor = new OrderProcessingService(
+                transformationService, orderPublisher, idempotencyService, retryProperties, clock, meterRegistry, realExecutor);
+
+        Thread callingThread = Thread.currentThread();
+        AtomicReference<Thread> executingThread = new AtomicReference<>();
+
+        when(transformationService.transform(any(), eq("msg-123"))).thenAnswer(invocation -> {
+            executingThread.set(Thread.currentThread());
+            return mockOrderJson;
+        });
+        when(orderPublisher.publish(any())).thenReturn(CompletableFuture.completedFuture("msg-123"));
+
+        serviceWithRealExecutor.processOrder(inputMessage).join();
+
+        assertThat(executingThread.get()).isNotNull();
+        assertThat(executingThread.get()).isNotSameAs(callingThread);
+        assertThat(executingThread.get().isVirtual()).isTrue();
     }
 }

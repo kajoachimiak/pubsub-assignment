@@ -38,6 +38,7 @@ import java.io.IOException;
 import java.util.Base64;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -75,6 +76,9 @@ class OrderIntegrationTest {
 
     @MockitoSpyBean
     private IdempotencyService idempotencyService;
+
+    @MockitoSpyBean
+    private ExecutorService processingExecutor;
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
@@ -170,6 +174,10 @@ class OrderIntegrationTest {
             String publishedPayload = receivedMessages.poll(5, TimeUnit.SECONDS);
             assertThat(publishedPayload).isNotNull();
             assertThat(publishedPayload).contains("\"orderId\":\"99999\"");
+
+            // The initial processing attempt must be dispatched via the dedicated
+            // processingExecutor bean rather than running inline on the HTTP request thread.
+            verify(processingExecutor, atLeast(1)).execute(any(Runnable.class));
         } finally {
             subscriber.stopAsync();
         }

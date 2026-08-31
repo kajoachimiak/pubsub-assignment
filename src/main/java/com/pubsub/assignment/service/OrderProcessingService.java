@@ -22,6 +22,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -35,6 +36,7 @@ public class OrderProcessingService {
     private final RetryProperties retryProperties;
     private final Clock clock;
     private final MeterRegistry meterRegistry;
+    private final Executor processingExecutor;
 
     public CompletableFuture<Void> processOrder(InputMessage inputMessage) {
         long startTime = System.currentTimeMillis();
@@ -47,7 +49,8 @@ public class OrderProcessingService {
             return CompletableFuture.completedFuture(null);
         }
 
-        return processWithRetry(inputMessage, 1)
+        return CompletableFuture.supplyAsync(() -> processWithRetry(inputMessage, 1), processingExecutor)
+                .thenCompose(future -> future)
                 .whenComplete((result, ex) -> {
                     long duration = System.currentTimeMillis() - startTime;
                     String status = (ex == null) ? "success" : "error";
