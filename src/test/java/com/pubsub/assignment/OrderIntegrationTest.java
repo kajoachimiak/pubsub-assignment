@@ -13,7 +13,10 @@ import com.google.pubsub.v1.PubsubMessage;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.TopicName;
 import com.pubsub.assignment.model.json.ErrorResponse;
+import com.pubsub.assignment.model.json.FailedMessage;
 import com.pubsub.assignment.model.json.InputMessage;
+import com.pubsub.assignment.publisher.OrderPublisher;
+import com.pubsub.assignment.service.IdempotencyService;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import org.junit.jupiter.api.BeforeAll;
@@ -25,6 +28,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PubSubEmulatorContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -33,9 +37,15 @@ import org.testcontainers.utility.DockerImageName;
 import java.io.IOException;
 import java.util.Base64;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verify;
 
 @Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -59,6 +69,12 @@ class OrderIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @MockitoSpyBean
+    private OrderPublisher orderPublisher;
+
+    @MockitoSpyBean
+    private IdempotencyService idempotencyService;
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
@@ -298,6 +314,72 @@ class OrderIntegrationTest {
 
             String duplicate = pollForMessageId(dlqMessages, malformedMessageId, 3);
             assertThat(duplicate).isNull();
+        } finally {
+            publisher.shutdown();
+            subscriber.stopAsync();
+        }
+    }
+
+    @Test
+    void shouldNackAndRedeliverWhenDlqRoutingFails() throws Exception {
+        String messageId = "msg-dlq-nack";
+
+        InputMessage request = new InputMessage();
+        request.setMessageId(messageId);
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument("InvalidBase64Content!!!");
+
+        // Simulate DLQ publishing failing for the first two attempts, then succeeding.
+        // Each failure raises DlqRoutingException -> consumer nack() -> redelivery.
+        AtomicInteger dlqAttempts = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (dlqAttempts.incrementAndGet() <= 2) {
+                return CompletableFuture.failedFuture(new RuntimeException("Simulated DLQ publish failure"));
+            }
+            return invocation.callRealMethod();
+        }).when(orderPublisher).publishToDlq(any(FailedMessage.class));
+
+        ArrayBlockingQueue<String> dlqMessages = new ArrayBlockingQueue<>(10);
+        ManagedChannel channel = ManagedChannelBuilder
+                .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
+                .usePlaintext()
+                .build();
+
+        MessageReceiver receiver = (message, consumer) -> {
+            dlqMessages.add(message.getData().toStringUtf8());
+            consumer.ack();
+        };
+
+        Subscriber subscriber = Subscriber.newBuilder(
+                        ProjectSubscriptionName.of(PROJECT_ID, FAILED_SUBSCRIPTION_ID),
+                        receiver)
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        subscriber.startAsync().awaitRunning();
+
+        Publisher publisher = Publisher.newBuilder(TopicName.of(PROJECT_ID, INPUT_TOPIC_ID))
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        try {
+            String payload = objectMapper.writeValueAsString(request);
+            publisher.publish(PubsubMessage.newBuilder()
+                    .setData(ByteString.copyFromUtf8(payload))
+                    .build());
+
+            // The DLQ message only materialises on the third attempt (the first real publish),
+            // which is reachable only via nack()-driven redelivery of the input message.
+            String dlqPayload = pollForMessageId(dlqMessages, messageId, 20);
+            assertThat(dlqPayload).isNotNull();
+            assertThat(dlqPayload).contains("\"reason\":\"Document is not a valid Base64 string.\"");
+
+            // Two failed DLQ routings => two DlqRoutingExceptions => two nack()s + redeliveries,
+            // and idempotency must be unregistered each time so the message can be reprocessed.
+            verify(orderPublisher, atLeast(3)).publishToDlq(any(FailedMessage.class));
+            verify(idempotencyService, atLeast(2)).unregister(messageId);
         } finally {
             publisher.shutdown();
             subscriber.stopAsync();
