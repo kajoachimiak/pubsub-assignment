@@ -5,6 +5,7 @@ import com.pubsub.assignment.model.xml.*;
 import org.junit.jupiter.api.Test;
 import org.mapstruct.factory.Mappers;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,7 +27,7 @@ class OrderMapperTest {
         xml.setBuyerCustomerParty(buyer);
 
         QuantityXml quantity = new QuantityXml();
-        quantity.setValue(100);
+        quantity.setValue(new BigDecimal("100.5"));
         quantity.setUnitCode("KGM");
 
         SellersItemIdentificationXml sellersItem = new SellersItemIdentificationXml();
@@ -36,7 +37,7 @@ class OrderMapperTest {
         item.setSellersItemIdentification(sellersItem);
 
         LineItemXml lineItem = new LineItemXml();
-        lineItem.setId(1);
+        lineItem.setId("LINE-1A");
         lineItem.setQuantity(quantity);
         lineItem.setItem(item);
 
@@ -57,8 +58,8 @@ class OrderMapperTest {
         assertThat(json.getExternalOrganizationId()).isEqualTo("ORG-999");
 
         assertThat(json.getLines()).hasSize(1);
-        assertThat(json.getLines().get(0).getLineId()).isEqualTo(1);
-        assertThat(json.getLines().get(0).getQuantity()).isEqualTo(100);
+        assertThat(json.getLines().get(0).getLineId()).isEqualTo("LINE-1A");
+        assertThat(json.getLines().get(0).getQuantity()).isEqualByComparingTo(new BigDecimal("100.5"));
         assertThat(json.getLines().get(0).getUnitOfMeasure()).isEqualTo("KGM");
         assertThat(json.getLines().get(0).getItemId()).isEqualTo("ITEM-XYZ");
         assertThat(json.getLines().get(0).getComment()).isEqualTo("Fragile package");

@@ -31,7 +31,9 @@ class OrderTransformationServiceTest {
     void shouldSuccessfullyTransformValidPayload() {
         // given
         String messageId = "msg-123";
-        String validXml = "<Order><ID>12345</ID></Order>";
+        String validXml = "<Order xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Order-2\" "
+                + "xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">"
+                + "<cbc:ID>12345</cbc:ID></Order>";
         String base64Payload = Base64.getEncoder().encodeToString(validXml.getBytes());
 
         OrderJson mappedJson = new OrderJson();
@@ -81,7 +83,7 @@ class OrderTransformationServiceTest {
     void shouldThrowMissingFieldExceptionWhenOrderIdIsMissing() {
         // given
         String messageId = "msg-123";
-        String validXml = "<Order></Order>";
+        String validXml = "<Order xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Order-2\"></Order>";
         String base64Payload = Base64.getEncoder().encodeToString(validXml.getBytes());
 
         OrderJson mappedJson = new OrderJson();

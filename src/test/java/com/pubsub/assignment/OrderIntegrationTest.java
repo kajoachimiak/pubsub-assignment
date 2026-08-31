@@ -138,7 +138,9 @@ class OrderIntegrationTest {
 
     @Test
     void shouldProcessOrderAndPublishToPubSub() throws Exception {
-        String validXml = "<Order><ID>99999</ID></Order>";
+        String validXml = "<Order xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Order-2\" "
+                + "xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">"
+                + "<cbc:ID>99999</cbc:ID></Order>";
         String base64Xml = Base64.getEncoder().encodeToString(validXml.getBytes());
 
         InputMessage request = new InputMessage();
@@ -227,7 +229,9 @@ class OrderIntegrationTest {
 
     @Test
     void shouldConsumeFromSubscriptionAndPublishTransformed() throws Exception {
-        String validXml = "<Order><ID>77777</ID></Order>";
+        String validXml = "<Order xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Order-2\" "
+                + "xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\">"
+                + "<cbc:ID>77777</cbc:ID></Order>";
         String base64Xml = Base64.getEncoder().encodeToString(validXml.getBytes());
 
         InputMessage request = new InputMessage();

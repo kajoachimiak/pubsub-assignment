@@ -8,7 +8,7 @@ The application is built with Spring Boot 3.4.2 and Java 21, utilizing an asynch
 
 *   **REST Endpoint (`/api/orders`)**: Receives push notifications from Pub/Sub.
 *   **Idempotency**: Utilizes an in-memory Least Recently Used (LRU) cache (via `IdempotencyService`) to track and ignore duplicate `messageId`s, preventing redundant processing and duplicate downstream messages.
-*   **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using JAXB with `StreamReaderDelegate` to handle XML namespaces dynamically.
+*   **OrderTransformationService**: Decodes Base64 payloads and parses UBL 2.1 XML using namespace-aware JAXB bindings (`@XmlSchema`/`@XmlElement(namespace = ...)`) matching the official `Order-2`, `cbc`, and `cac` UBL namespaces.
 *   **OrderMapper**: MapStruct mapper that converts UBL XML objects to the output JSON domain model.
 *   **OrderPublisher**: Asynchronously publishes transformed messages to Google Cloud Pub/Sub using `PubSubTemplate`.
 *   **Retry Mechanism**: Configurable asynchronous retries (`app.pubsub.retry.max-attempts`, `app.pubsub.retry.backoff-ms`) for transient errors (e.g., publishing failures). Non-retriable business errors (validation, parsing) bypass retries and are routed immediately to the DLQ.

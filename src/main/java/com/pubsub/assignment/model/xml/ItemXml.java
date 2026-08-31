@@ -8,6 +8,6 @@ import lombok.Data;
 @Data
 @XmlAccessorType(XmlAccessType.FIELD)
 public class ItemXml {
-    @XmlElement(name = "SellersItemIdentification")
+    @XmlElement(name = "SellersItemIdentification", namespace = UblNamespaces.CAC)
     private SellersItemIdentificationXml sellersItemIdentification;
 }

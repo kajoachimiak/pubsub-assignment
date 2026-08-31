@@ -15,7 +15,6 @@ import org.springframework.stereotype.Service;
 
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamReader;
-import javax.xml.stream.util.StreamReaderDelegate;
 import java.io.ByteArrayInputStream;
 import java.util.Base64;
 
@@ -50,15 +49,8 @@ public class OrderTransformationService {
             xif.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
             XMLStreamReader xsr = xif.createXMLStreamReader(new ByteArrayInputStream(decodedXmlBytes));
 
-            XMLStreamReader noNsReader = new StreamReaderDelegate(xsr) {
-                @Override
-                public String getNamespaceURI() {
-                    return "";
-                }
-            };
-
             Unmarshaller unmarshaller = JAXB_CONTEXT.createUnmarshaller();
-            OrderXml orderXml = (OrderXml) unmarshaller.unmarshal(noNsReader);
+            OrderXml orderXml = (OrderXml) unmarshaller.unmarshal(xsr);
 
             orderJson = orderMapper.toOrderJson(orderXml);
         } catch (Exception e) {

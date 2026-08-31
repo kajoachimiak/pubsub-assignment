@@ -22,7 +22,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InvalidXmlException.class)
     public ResponseEntity<ErrorResponse> handleInvalidXml(InvalidXmlException ex) {
-        log.warn("XML parsing failed for messageId: {}. Reason: {}", ex.getMessageId(), ex.getCause().getMessage());
+        String causeMessage = (ex.getCause() != null) ? ex.getCause().getMessage() : ex.getMessage();
+        log.warn("XML parsing failed for messageId: {}. Reason: {}", ex.getMessageId(), causeMessage);
         ErrorResponse response = new ErrorResponse("InvalidXml", ex.getMessage(), ex.getMessageId());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
@@ -47,16 +48,36 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
 
+    @ExceptionHandler(PublishingException.class)
+    public ResponseEntity<ErrorResponse> handlePublishing(PublishingException ex) {
+        log.error("Publishing failed for messageId: {}. Message routed to DLQ. Reason: {}",
+                ex.getMessageId(), ex.getMessage(), ex);
+        ErrorResponse response = new ErrorResponse("PublishingError", ex.getMessage(), ex.getMessageId());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(response);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneralException(Exception ex) {
-        log.error("Unexpected error occurred", ex);
-        ErrorResponse response = new ErrorResponse("ServerError", "An unexpected error occurred.", "unknown");
+        String messageId = extractMessageId(ex);
+        log.error("Unexpected error occurred for messageId: {}", messageId, ex);
+        ErrorResponse response = new ErrorResponse("ServerError", "An unexpected error occurred.", messageId);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
     }
 
     private String extractMessageId(MethodArgumentNotValidException ex) {
         if (ex.getBindingResult().getTarget() instanceof InputMessage inputMessage) {
             return inputMessage.getMessageId() != null ? inputMessage.getMessageId() : "missing";
+        }
+        return "unknown";
+    }
+
+    private String extractMessageId(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            if (current instanceof ProcessingException processingException) {
+                return processingException.getMessageId();
+            }
+            current = current.getCause();
         }
         return "unknown";
     }
