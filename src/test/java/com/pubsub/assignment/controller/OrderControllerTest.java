@@ -239,4 +239,27 @@ class OrderControllerTest {
 
         verify(orderProcessingService, never()).processOrder(any());
     }
+
+    @Test
+    void shouldReturn400WhenRequestBodyIsEmpty() throws Exception {
+        // when & then
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("ValidationError"));
+
+        verify(orderProcessingService, never()).processOrder(any());
+    }
+
+    @Test
+    void shouldReturn400WhenRequestBodyIsMissing() throws Exception {
+        // when & then
+        mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("ValidationError"));
+
+        verify(orderProcessingService, never()).processOrder(any());
+    }
 }

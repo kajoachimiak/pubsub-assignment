@@ -15,6 +15,7 @@ import com.google.pubsub.v1.TopicName;
 import com.pubsub.assignment.model.json.ErrorResponse;
 import com.pubsub.assignment.model.json.FailedMessage;
 import com.pubsub.assignment.model.json.InputMessage;
+import com.pubsub.assignment.model.json.OutputMessage;
 import com.pubsub.assignment.publisher.OrderPublisher;
 import com.pubsub.assignment.service.IdempotencyService;
 import io.grpc.ManagedChannel;
@@ -24,7 +25,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -35,6 +40,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.file.Files;
 import java.util.Base64;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -175,7 +182,12 @@ class OrderIntegrationTest {
 
             String publishedPayload = receivedMessages.poll(5, TimeUnit.SECONDS);
             assertThat(publishedPayload).isNotNull();
-            assertThat(publishedPayload).contains("\"orderId\":\"99999\"");
+
+            OutputMessage output = objectMapper.readValue(publishedPayload, OutputMessage.class);
+            assertThat(output.getMessageId()).isEqualTo("msg-integration-1");
+            assertThat(output.getTransformedAt()).isNotBlank();
+            assertThat(output.getOrder()).isNotNull();
+            assertThat(output.getOrder().getOrderId()).isEqualTo("99999");
 
             // The initial processing attempt must be dispatched via the dedicated
             // processingExecutor bean rather than running inline on the HTTP request thread.
@@ -183,6 +195,85 @@ class OrderIntegrationTest {
         } finally {
             subscriber.stopAsync();
         }
+    }
+
+    @Test
+    void shouldTransformRealUblExampleXmlEndToEndWithFullNestedStructure() throws Exception {
+        byte[] xmlBytes = Files.readAllBytes(new ClassPathResource("ubl-example.xml").getFile().toPath());
+        String base64Xml = Base64.getEncoder().encodeToString(xmlBytes);
+
+        InputMessage request = new InputMessage();
+        request.setMessageId("msg-ubl-example");
+        request.setTimestamp("2026-08-25T12:00:00Z");
+        request.setDocument(base64Xml);
+
+        ArrayBlockingQueue<String> receivedMessages = new ArrayBlockingQueue<>(1);
+        ManagedChannel channel = ManagedChannelBuilder
+                .forTarget("dns:///" + PUB_SUB_EMULATOR.getEmulatorEndpoint())
+                .usePlaintext()
+                .build();
+
+        MessageReceiver receiver = (message, consumer) -> {
+            receivedMessages.add(message.getData().toStringUtf8());
+            consumer.ack();
+        };
+
+        Subscriber subscriber = Subscriber.newBuilder(
+                        ProjectSubscriptionName.of(PROJECT_ID, SUBSCRIPTION_ID),
+                        receiver)
+                .setChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
+                .setCredentialsProvider(NoCredentialsProvider.create())
+                .build();
+
+        subscriber.startAsync().awaitRunning();
+
+        try {
+            ResponseEntity<Void> response = restTemplate.postForEntity("/api/orders", request, Void.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+            String publishedPayload = receivedMessages.poll(5, TimeUnit.SECONDS);
+            assertThat(publishedPayload).isNotNull();
+
+            OutputMessage output = objectMapper.readValue(publishedPayload, OutputMessage.class);
+            assertThat(output.getMessageId()).isEqualTo("msg-ubl-example");
+            assertThat(output.getTransformedAt()).isNotBlank();
+
+            assertThat(output.getOrder()).isNotNull();
+            assertThat(output.getOrder().getOrderId()).isEqualTo("12347");
+            assertThat(output.getOrder().getOrderDate()).isEqualTo("2025-01-01");
+            assertThat(output.getOrder().getReference()).isEqualTo("test-order");
+            assertThat(output.getOrder().getExternalOrganizationId()).isEqualTo("1234567");
+
+            assertThat(output.getOrder().getLines()).hasSize(2);
+
+            assertThat(output.getOrder().getLines().get(0).getLineId()).isEqualTo("1");
+            assertThat(output.getOrder().getLines().get(0).getItemId()).isEqualTo("100100");
+            assertThat(output.getOrder().getLines().get(0).getQuantity()).isEqualByComparingTo(BigDecimal.ONE);
+            assertThat(output.getOrder().getLines().get(0).getUnitOfMeasure()).isEqualTo("EA");
+            assertThat(output.getOrder().getLines().get(0).getComment()).isEqualTo("Optional OrderLine Note");
+
+            assertThat(output.getOrder().getLines().get(1).getLineId()).isEqualTo("2");
+            assertThat(output.getOrder().getLines().get(1).getItemId()).isEqualTo("100103");
+            assertThat(output.getOrder().getLines().get(1).getQuantity()).isEqualByComparingTo(BigDecimal.ONE);
+            assertThat(output.getOrder().getLines().get(1).getUnitOfMeasure()).isEqualTo("EA");
+            assertThat(output.getOrder().getLines().get(1).getComment()).isEqualTo("Optional OrderLine Note");
+        } finally {
+            subscriber.stopAsync();
+        }
+    }
+
+    @Test
+    void shouldReturn400WhenRequestBodyIsMissing() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<String> emptyBodyRequest = new HttpEntity<>("", headers);
+
+        ResponseEntity<ErrorResponse> response = restTemplate.postForEntity(
+                "/api/orders", emptyBodyRequest, ErrorResponse.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error()).isEqualTo("ValidationError");
     }
 
     @Test
@@ -272,8 +363,12 @@ class OrderIntegrationTest {
 
             String publishedPayload = receivedMessages.poll(10, TimeUnit.SECONDS);
             assertThat(publishedPayload).isNotNull();
-            assertThat(publishedPayload).contains("\"messageId\":\"msg-subscription-1\"");
-            assertThat(publishedPayload).contains("\"orderId\":\"77777\"");
+
+            OutputMessage output = objectMapper.readValue(publishedPayload, OutputMessage.class);
+            assertThat(output.getMessageId()).isEqualTo("msg-subscription-1");
+            assertThat(output.getTransformedAt()).isNotBlank();
+            assertThat(output.getOrder()).isNotNull();
+            assertThat(output.getOrder().getOrderId()).isEqualTo("77777");
         } finally {
             publisher.shutdown();
             subscriber.stopAsync();

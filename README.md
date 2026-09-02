@@ -14,7 +14,7 @@ The application is built with Spring Boot 3.4.2 and Java 21, utilizing an asynch
 *   **OrderPublisher**: Asynchronously publishes transformed messages to Google Cloud Pub/Sub using `PubSubTemplate`.
 *   **Retry Mechanism**: Configurable asynchronous retries (`app.pubsub.retry.max-attempts`, `app.pubsub.retry.backoff-ms`) for transient errors (e.g., publishing failures). Non-retriable business errors (validation, parsing) bypass retries and are routed immediately to the DLQ.
 *   **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or exhausted publishing retries are automatically routed to the `orders.failed` topic.
-*   **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) into standard error responses.
+*   **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) as well as unreadable/missing request bodies (`HttpMessageNotReadableException`) into standard `400 Bad Request` error responses.
 *   **Observability**: Implements structured JSON logging (ECS format) with MDC correlation (including `messageId` and GCP `traceId`), and tracks processing performance using Micrometer/Actuator (`order.processing.duration`).
 
 ## Prerequisites

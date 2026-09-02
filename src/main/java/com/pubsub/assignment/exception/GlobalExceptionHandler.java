@@ -5,6 +5,7 @@ import com.pubsub.assignment.model.json.InputMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -45,6 +46,13 @@ public class GlobalExceptionHandler {
 
         log.warn("Payload validation failed for messageId: {}. Reason: {}", messageId, errorMessage);
         ErrorResponse response = new ErrorResponse("ValidationError", errorMessage, messageId);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        log.warn("Request body is missing or malformed: {}", ex.getMessage());
+        ErrorResponse response = new ErrorResponse("ValidationError", "Request body is missing or malformed.", "unknown");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
 
