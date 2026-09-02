@@ -15,12 +15,20 @@ The application is built with Spring Boot 3.4.2 and Java 21, utilizing an asynch
 *   **Retry Mechanism**: Configurable asynchronous retries (`app.pubsub.retry.max-attempts`, `app.pubsub.retry.backoff-ms`) for transient errors (e.g., publishing failures). Non-retriable business errors (validation, parsing) bypass retries and are routed immediately to the DLQ.
 *   **Dead Letter Queue (DLQ)**: Failed messages resulting from invalid Base64, XML parsing issues, missing required fields, or exhausted publishing retries are automatically routed to the `orders.failed` topic.
 *   **GlobalExceptionHandler**: Converts application exceptions (`InvalidBase64Exception`, `InvalidXmlException`, `MissingFieldException`) as well as unreadable/missing request bodies (`HttpMessageNotReadableException`) into standard `400 Bad Request` error responses.
-*   **Observability**: Implements structured JSON logging (ECS format) with MDC correlation (including `messageId` and GCP `traceId`), and tracks processing performance using Micrometer/Actuator (`order.processing.duration`).
+*   **Observability**: Implements structured JSON logging (ECS format) with MDC correlation (including `messageId` and GCP `traceId`), and tracks processing performance and latency using Micrometer/Actuator (`order.processing.duration`, `order.message.age`).
 
 ## Prerequisites
 
 *   Java 21 JDK
 *   Docker & Docker Compose
+
+## Containerization
+
+The `Dockerfile` uses a multi-stage build following production best practices:
+
+*   **Layer Caching**: Dependency-related files (`gradlew`, `settings.gradle`, `build.gradle`, `gradle/`) are copied and resolved (`./gradlew dependencies`) *before* application source is copied. Source-only changes therefore reuse the cached dependency layer instead of re-downloading them.
+*   **Non-Root User**: The runtime image creates and runs as a dedicated unprivileged `spring` system user/group rather than root.
+*   **Explicit `${PORT}` Resolution**: The `ENTRYPOINT` uses shell form (`sh -c exec java -Dserver.port=${PORT} -jar app.jar`) so the `PORT` environment variable is reliably expanded by the shell before the JVM starts, and `exec` ensures `java` becomes PID 1 to receive `SIGTERM` directly for graceful shutdown.
 
 ## Getting Started
 
@@ -59,7 +67,13 @@ The application includes built-in observability features to monitor and debug pr
 curl -s http://localhost:8080/actuator/metrics/order.processing.duration
 ```
 
-*   **Health & Readiness Probes**: The Actuator exposes `/actuator/health`, plus `/actuator/health/liveness` and `/actuator/health/readiness` group endpoints suitable for Cloud Run startup/liveness probes. (`management.health.pubsub` is disabled because `spring-cloud-gcp-starter-pubsub` 4.1.1's Pub/Sub health indicator is incompatible with Spring Boot 3.4.2's Actuator and crashes the application context on startup.)
+*   **Message Age Latency**: The `order.message.age` Micrometer timer measures the elapsed time between `InputMessage.timestamp` (when the message was sent) and when it was received for processing, giving end-to-end pipeline latency independent of processing duration. Messages with a missing or unparseable `timestamp` are logged as a warning and skipped for this metric, but still processed normally.
+
+```bash
+curl -s http://localhost:8080/actuator/metrics/order.message.age
+```
+
+*   **Health & Readiness Probes**: `management.endpoint.health.probes.enabled=true` exposes `/actuator/health`, plus `/actuator/health/liveness` and `/actuator/health/readiness` group endpoints (backed by `livenessstate`/`readinessstate` indicators) suitable for Cloud Run startup/liveness/readiness probes. `management.health.pubsub` is explicitly disabled (`management.health.pubsub.enabled=false`) because `spring-cloud-gcp-starter-pubsub` 4.1.1's `PubSubHealthIndicatorAutoConfiguration` is binary-incompatible with Spring Boot 3.4.2's Actuator (`NoSuchMethodError` on `CompositeHealthContributorConfiguration`'s no-arg constructor), which would crash the application context on startup if enabled.
 
 ## How to Test
 
@@ -167,6 +181,18 @@ curl -i -X POST http://localhost:8080/api/orders \
   "error": "ValidationError",
   "message": "Order ID is required.",
   "messageId": "7a1e78c9"
+}
+```
+
+### Missing or Unreadable Request Body (400 Bad Request)
+
+An empty, missing, or malformed JSON request body is handled explicitly instead of surfacing as a 500 error:
+
+```json
+{
+  "error": "ValidationError",
+  "message": "Request body is missing or malformed.",
+  "messageId": "unknown"
 }
 ```
 
